@@ -201,10 +201,10 @@ impl SVDImplementation for LapackSVD {
 }
 
 #[cfg(feature="faer")]
-pub struct FearSVD;
+pub struct FaerSVD;
 
 #[cfg(feature="faer")]
-impl SVDImplementation for FearSVD {
+impl SVDImplementation for FaerSVD {
     fn compute(&self, matrix: ArrayView2<f64>) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
         let svd = crate::svd::faer::SVD::new(&matrix);
 
