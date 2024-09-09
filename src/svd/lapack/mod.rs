@@ -17,14 +17,11 @@ impl SVD {
         }
     }
 
-    pub fn compute(&mut self, x: ArrayView2<f64>, thread_pool: &ThreadPool) -> anyhow::Result<()> {
+    pub fn compute(&mut self, x: ArrayView2<f64>) -> anyhow::Result<()> {
         let matrix = x.into_nalgebra().clone_owned();
 
-        let svd = thread_pool
-            .install(|| nalgebra_lapack::SVD::new(matrix))
-            .unwrap();
-
-        self.u = Some(svd.u.());
+        let svd = nalgebra_lapack::SVD::new(matrix).unwrap();
+        self.u = Some(svd.u.into_ndarray2());
         self.s = Some(Array1::from(svd.singular_values.as_slice().to_vec()));
         self.vt = Some(svd.vt.into_ndarray2());
 
@@ -73,8 +70,7 @@ mod tests {
     fn test_simple_svd() {
         let a = array![[1.0, 2.0], [3.0, 4.0]];
         let mut svd = SVD::new();
-        let tb = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-        svd.compute(a.view(), &tb).unwrap();
+        svd.compute(a.view()).unwrap();
         let s = svd.s().unwrap();
         let vt = svd.vt().unwrap();
         let u = svd.u().unwrap();

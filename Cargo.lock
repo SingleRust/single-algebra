@@ -799,15 +799,16 @@ dependencies = [
  "num-complex",
  "num-rational",
  "num-traits",
+ "serde",
  "simba 0.7.3",
  "typenum",
 ]
 
 [[package]]
 name = "nalgebra"
-version = "0.33.0"
+version = "0.32.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c4b5f057b303842cf3262c27e465f4c303572e7f6b0648f60e16248ac3397f4"
+checksum = "7b5c17de023a86f59ed79891b2e5d5a94c705dbe904a5b5c9c952ea6221b03e4"
 dependencies = [
  "approx",
  "matrixmultiply",
@@ -815,22 +816,22 @@ dependencies = [
  "num-complex",
  "num-rational",
  "num-traits",
- "simba 0.9.0",
+ "simba 0.8.1",
  "typenum",
 ]
 
 [[package]]
 name = "nalgebra-lapack"
-version = "0.25.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b375d1c3c6c8f1eeaeefda3f0e3517af4c294c44f5c2929101f6b0dc977d1db7"
+checksum = "ca98d4a2d43fc66d41206cb853e853d5345a6c93ab773a2ff709adeb47b4d547"
 dependencies = [
  "lapack",
  "lapack-src",
- "nalgebra 0.33.0",
+ "nalgebra 0.30.1",
  "num-complex",
  "num-traits",
- "simba 0.9.0",
+ "simba 0.7.3",
 ]
 
 [[package]]
@@ -857,11 +858,11 @@ dependencies = [
 
 [[package]]
 name = "nalgebra-sparse"
-version = "0.10.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1107e2587bc373090389bd5b54e05ac3184fd02d7c102decf5d76b8feb84b2d0"
+checksum = "7b113b3101e137b3d0ef20b76b7579cde88e3d1f2f64993d4d6a49f232055cc9"
 dependencies = [
- "nalgebra 0.33.0",
+ "nalgebra 0.32.6",
  "num-traits",
 ]
 
@@ -1021,6 +1022,7 @@ dependencies = [
  "bytemuck",
  "num-traits",
  "rand",
+ "serde",
 ]
 
 [[package]]
@@ -1363,9 +1365,9 @@ checksum = "7a66a03ae7c801facd77a29370b4faec201768915ac14a721ba36f20bc9c209b"
 
 [[package]]
 name = "rustix"
-version = "0.38.35"
+version = "0.38.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a85d50532239da68e9addb745ba38ff4612a242c1c7ceea689c4bc7c2f43c36f"
+checksum = "3f55e80d50763938498dd5ebb18647174e0c76dc38c5505294bb224624f30f36"
 dependencies = [
  "bitflags 2.6.0",
  "errno",
@@ -1423,11 +1425,11 @@ dependencies = [
 
 [[package]]
 name = "schannel"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbc91545643bcf3a0bbb6569265615222618bdf33ce4ffbbd13c4bbd4c093534"
+checksum = "e9aaafd5a2b6e3d657ff009d82fbd630b6bd54dd4eb06f21693925cdf80f9b8b"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1511,9 +1513,9 @@ dependencies = [
 
 [[package]]
 name = "simba"
-version = "0.9.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3a386a501cd104797982c15ae17aafe8b9261315b5d07e3ec803f2ea26be0fa"
+checksum = "061507c94fc6ab4ba1c9a0305018408e312e17c041eb63bef8aa726fa33aceae"
 dependencies = [
  "approx",
  "num-complex",
@@ -1524,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "single_algebra"
-version = "0.1.0-alpha.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "approx",

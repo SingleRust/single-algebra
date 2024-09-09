@@ -1,6 +1,5 @@
 use ndarray::{s, Array1, Array2, ArrayView2, Axis};
 use rayon::prelude::*;
-use ndarray::parallel::prelude::*;
 use std::sync::Arc;
 
 // Trait for SVD implementations
@@ -187,18 +186,17 @@ impl<S: SVDImplementation> Pca<S> {
 }
 
 // Example implementation of the SVDImplementation trait
+#[cfg(feature="lapack")]
 pub struct LapackSVD;
 
+#[cfg(feature="lapack")]
 impl SVDImplementation for LapackSVD {
     fn compute(&self, matrix: ArrayView2<f64>) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
         // This is where you'd implement the LAPACK SVD computation
         // For now, we'll just return dummy values
-        let (m, n) = matrix.dim();
-        (
-            Array2::zeros((m, m)),
-            Array1::zeros(m.min(n)),
-            Array2::zeros((n, n)),
-        )
+        let mut svd = crate::svd::lapack::SVD::new();
+        svd.compute(matrix).unwrap();
+        (svd.u().cloned().unwrap(), svd.s().cloned().unwrap(), svd.vt().cloned().unwrap())
     }
 }
 

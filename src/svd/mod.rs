@@ -4,5 +4,5 @@
 #[cfg(feature="faer")]
 pub mod faer;
 
-//#[cfg(feature="lapack")]
-//pub mod lapack;
+#[cfg(feature="lapack")]
+pub mod lapack;
