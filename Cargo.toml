@@ -2,6 +2,11 @@
 name = "single_algebra"
 version = "0.1.0-alpha.0"
 edition = "2021"
+license-file = "LICENSE.md"
+description = "A linear algebra convenience library for the single-rust library. Can be used externally as well."
+categories = ["science"]
+repository = "https://github.com/SingleRust/single-algebra"
+
 
 [features]
 smartcore = ["dep:smartcore"]
