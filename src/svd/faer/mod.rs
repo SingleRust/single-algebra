@@ -30,3 +30,38 @@ impl SVD {
         &self.vt
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use approx::assert_abs_diff_eq;
+    use ndarray::array;
+
+    use super::*;
+
+    #[test]
+    fn test_simple_svd() {
+        let a = array![[1.0, 2.0], [3.0, 4.0]];
+        let svd = SVD::new(&a.view());
+        let s = svd.s();
+        let vt = svd.vt();
+        let u = svd.u();
+        // Check dimensions
+        assert_eq!(u.shape(), &[2, 2]);
+        assert_eq!(s.len(), 2);
+        assert_eq!(vt.shape(), &[2, 2]);
+
+        // Check singular values (pre-computed)
+        assert_abs_diff_eq!(s[0], 5.4649857, epsilon = 1e-6);
+        assert_abs_diff_eq!(s[1], 0.3659662, epsilon = 1e-6);
+
+        // Check reconstruction
+        let s_diag = ndarray::Array2::from_diag(s);
+        let reconstructed = u.dot(&s_diag).dot(vt);
+        
+        for i in 0..2 { 
+            for j in 0..2 {
+                assert_abs_diff_eq!(reconstructed[[i, j]], a[[i, j]], epsilon = 1e-6);
+            }
+        }
+    }
+}

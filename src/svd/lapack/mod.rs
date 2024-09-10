@@ -1,6 +1,5 @@
 use ndarray::{Array1, Array2, ArrayView2};
 use nshare::{ToNalgebra, ToNdarray2};
-use rayon::ThreadPool;
 
 pub struct SVD {
     u: Option<Array2<f64>>,
@@ -62,8 +61,6 @@ impl Default for SVD {
 mod tests {
     use approx::assert_abs_diff_eq;
     use ndarray::array;
-    use rayon::ThreadPoolBuilder;
-
     use super::*;
 
     #[test]

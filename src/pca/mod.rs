@@ -95,6 +95,7 @@ impl<S: SVDImplementation> Pca<S> {
 
         // Extract principal components and eigenvalues
         let components = vt.slice(s![..n_components, ..]).to_owned();
+
         let eigenvalues = s.mapv(|x| x * x / (n_samples as f64 - 1.0));
 
         // Compute explained variance ratio
@@ -150,11 +151,10 @@ impl<S: SVDImplementation> Pca<S> {
     pub fn transform(&self, x: ArrayView2<f64>) -> anyhow::Result<Array2<f64>> {
         if let Some(components) = &self.components {
             let x_preprocessed = self.preprocess(x, &self.mean, &self.std_dev);
-
+            
             // Ensure that we're using ArrayView2 for the dot product
             let x_preprocessed_view = x_preprocessed.view();
             let components_view = components.view();
-
             // Perform the matrix multiplication
             Ok(x_preprocessed_view.dot(&components_view.t()))
         } else {
@@ -186,28 +186,118 @@ impl<S: SVDImplementation> Pca<S> {
 }
 
 // Example implementation of the SVDImplementation trait
-#[cfg(feature="lapack")]
+#[cfg(feature = "lapack")]
 pub struct LapackSVD;
 
-#[cfg(feature="lapack")]
+#[cfg(feature = "lapack")]
 impl SVDImplementation for LapackSVD {
     fn compute(&self, matrix: ArrayView2<f64>) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
         // This is where you'd implement the LAPACK SVD computation
         // For now, we'll just return dummy values
         let mut svd = crate::svd::lapack::SVD::new();
         svd.compute(matrix).unwrap();
-        (svd.u().cloned().unwrap(), svd.s().cloned().unwrap(), svd.vt().cloned().unwrap())
+        (
+            svd.u().cloned().unwrap(),
+            svd.s().cloned().unwrap(),
+            svd.vt().cloned().unwrap(),
+        )
     }
 }
 
-#[cfg(feature="faer")]
+#[cfg(feature = "faer")]
 pub struct FaerSVD;
 
-#[cfg(feature="faer")]
+#[cfg(feature = "faer")]
 impl SVDImplementation for FaerSVD {
     fn compute(&self, matrix: ArrayView2<f64>) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
         let svd = crate::svd::faer::SVD::new(&matrix);
 
         (svd.u().clone(), svd.s().clone(), svd.vt().clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::{FaerSVD, LapackSVD, PCABuilder, SVDImplementation};
+    use ndarray::{array, Array1, Array2};
+
+    #[cfg(feature = "lapack")]
+    #[test]
+    fn test_pca_with_lapack_svd() {
+        let x = array![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]];
+        let mut pca = PCABuilder::new(LapackSVD).n_components(2).build();
+
+        pca.fit(x.view()).unwrap();
+
+        assert!(pca.components().is_some());
+    }
+
+    #[cfg(feature = "faer")]
+    #[test]
+    fn test_pca_with_faer_svd() {
+        let x = array![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]];
+        let mut pca = PCABuilder::new(FaerSVD).n_components(2).build();
+
+        pca.fit(x.view()).unwrap();
+
+        assert!(pca.components().is_some());
+    }
+
+    #[cfg(feature = "lapack")]
+    #[test]
+    fn test_pca_with_different_n_components_lap() {
+        let x = array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
+        let mut pca = PCABuilder::new(LapackSVD).n_components(2).build();
+
+        // pca.fit(x.view()).unwrap();
+        // let transformed = pca.transform(x.view()).unwrap();
+
+        // assert_eq!(transformed.shape(), &[3, 2]);
+
+        // // Test with n_components = 1
+        let mut pca_1 = PCABuilder::new(LapackSVD).n_components(1).build();
+        pca_1.fit(x.view()).unwrap();
+        let transformed_1 = pca_1.transform(x.view()).unwrap();
+        assert_eq!(transformed_1.shape(), &[3, 1]);
+
+        // Test with n_components = 3 (full dimensionality)
+        let mut pca_3 = PCABuilder::new(LapackSVD).n_components(3).build();
+        pca_3.fit(x.view()).unwrap();
+        let transformed_3 = pca_3.transform(x.view()).unwrap();
+        assert_eq!(transformed_3.shape(), &[3, 3]);
+    }
+
+    #[cfg(feature = "faer")]
+    #[test]
+    fn test_pca_with_different_n_components_faer() {
+        let x = array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
+        let mut pca = PCABuilder::new(FaerSVD).n_components(2).build();
+
+        // pca.fit(x.view()).unwrap();
+        // let transformed = pca.transform(x.view()).unwrap();
+
+        // assert_eq!(transformed.shape(), &[3, 2]);
+
+        // // Test with n_components = 1
+        let mut pca_1 = PCABuilder::new(FaerSVD).n_components(1).build();
+        pca_1.fit(x.view()).unwrap();
+        let transformed_1 = pca_1.transform(x.view()).unwrap();
+        assert_eq!(transformed_1.shape(), &[3, 1]);
+
+        // Test with n_components = 3 (full dimensionality)
+        let mut pca_3 = PCABuilder::new(FaerSVD).n_components(3).build();
+        pca_3.fit(x.view()).unwrap();
+        let transformed_3 = pca_3.transform(x.view()).unwrap();
+        assert_eq!(transformed_3.shape(), &[3, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "PCA has not been fitted yet")]
+    fn test_pca_transform_without_fit() {
+        let x = array![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]];
+        let pca = PCABuilder::new(FaerSVD).n_components(2).build();
+
+        pca.transform(x.view()).unwrap();
     }
 }
