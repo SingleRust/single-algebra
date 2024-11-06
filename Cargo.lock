@@ -1525,6 +1525,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "simba"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3a386a501cd104797982c15ae17aafe8b9261315b5d07e3ec803f2ea26be0fa"
+dependencies = [
+ "approx",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "wide",
+]
+
+[[package]]
 name = "single_algebra"
 version = "0.1.0-alpha.3"
 dependencies = [
@@ -1539,7 +1552,9 @@ dependencies = [
  "nalgebra-sparse",
  "ndarray",
  "nshare",
+ "num-traits",
  "rayon",
+ "simba 0.9.0",
  "smartcore",
 ]
 

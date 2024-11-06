@@ -151,7 +151,7 @@ impl<S: SVDImplementation> Pca<S> {
     pub fn transform(&self, x: ArrayView2<f64>) -> anyhow::Result<Array2<f64>> {
         if let Some(components) = &self.components {
             let x_preprocessed = self.preprocess(x, &self.mean, &self.std_dev);
-            
+
             // Ensure that we're using ArrayView2 for the dot product
             let x_preprocessed_view = x_preprocessed.view();
             let components_view = components.view();
@@ -219,8 +219,14 @@ impl SVDImplementation for FaerSVD {
 #[cfg(test)]
 mod tests {
 
-    use super::{FaerSVD, LapackSVD, PCABuilder, SVDImplementation};
-    use ndarray::{array, Array1, Array2};
+    #[cfg(feature = "faer")]
+    use super::FaerSVD;
+
+    #[cfg(feature = "lapack")]
+    use super::LapackSVD;
+
+    use super::PCABuilder;
+    use ndarray::array;
 
     #[cfg(feature = "lapack")]
     #[test]
@@ -294,6 +300,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "PCA has not been fitted yet")]
+    #[cfg(feature = "faer")]
     fn test_pca_transform_without_fit() {
         let x = array![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]];
         let pca = PCABuilder::new(FaerSVD).n_components(2).build();
