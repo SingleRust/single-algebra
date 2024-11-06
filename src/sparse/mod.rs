@@ -1,4 +1,4 @@
-use std::ops::{AddAssign};
+use std::ops::AddAssign;
 
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 
@@ -24,39 +24,55 @@ pub trait MatrixNonZero {
 }
 
 pub trait MatrixSum {
-    fn sum_col<T>(&self) -> anyhow::Result<T>
-    where
-        T: Float;
+    type Item;
 
-    fn sum_row<T>(&self) -> anyhow::Result<T>
+    fn sum_col<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float;
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast;
+
+    fn sum_row<T>(&self) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast;
 
     fn sum_col_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: Float;
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast;
 
     fn sum_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: Float;
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast;
 }
 
 pub trait MatrixVariance {
-    fn var_col<T>(&self) -> anyhow::Result<Vec<T>>
-    where
-        T: Float;
+    type Item;
 
-    fn var_row<T>(&self) -> anyhow::Result<Vec<T>>
+    fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float;
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast + MatrixSum + MatrixNonZero;
 
-    fn var_col_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
+    fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float;
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast + MatrixSum + MatrixNonZero;
 
-    fn var_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
+    fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: Float;
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast;
+
+    fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast;
 }
 
 pub trait MatrixMinMax {
