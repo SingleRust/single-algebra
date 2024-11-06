@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign};
+use std::ops::{AddAssign};
 
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 
