@@ -2,11 +2,11 @@ use std::ops::AddAssign;
 
 use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
-use num_traits::{Float, PrimInt, Unsigned, Zero};
+use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 
 use crate::NumericOps;
 
-use super::{MatrixNonZero, MatrixSum};
+use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
 
 impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -113,12 +113,276 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
     fn sum_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: Float + num_traits::NumCast+ AddAssign + std::iter::Sum,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
         Self::Item: num_traits::NumCast,
     {
         for (row, row_vec) in self.row_iter().enumerate() {
             reference[row] = row_vec.values().iter().map(|&v| T::from(v).unwrap()).sum();
         }
+        Ok(())
+    }
+}
+
+impl<M: NumericOps> MatrixVariance for CsrMatrix<M> {
+    type Item = M;
+
+    fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast + MatrixSum + MatrixNonZero,
+    {
+        let sum: Vec<T> = self.sum_col()?;
+        let count: Vec<I> = self.nonzero_col()?;
+        let mut result = vec![T::zero(); self.ncols()];
+        let mut squared_sums = vec![T::zero(); self.ncols()];
+
+        // First pass: calculate squared sums for each column
+        for (value, &col) in self.values().iter().zip(self.col_indices().iter()) {
+            let val = T::from(*value).unwrap();
+            squared_sums[col] += val * val;
+        }
+
+        // Second pass: calculate variances
+        for col in 0..self.ncols() {
+            if count[col] > I::zero() {
+                let mean = sum[col] / count[col].into();
+                result[col] = squared_sums[col] / count[col].into() - mean * mean;
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast + MatrixSum + MatrixNonZero,
+    {
+        let sum: Vec<T> = self.sum_row()?;
+        let count: Vec<I> = self.nonzero_row()?;
+        let mut result = vec![T::zero(); self.nrows()];
+
+        // Calculate variance for each row
+        for row in 0..self.nrows() {
+            if count[row] > I::zero() {
+                let row_start = self.row_offsets()[row];
+                let row_end = self
+                    .row_offsets()
+                    .get(row + 1)
+                    .copied()
+                    .unwrap_or(self.values().len());
+                let mean = sum[row] / count[row].into();
+
+                // Calculate sum of squared differences for this row
+                let variance = self.values()[row_start..row_end]
+                    .iter()
+                    .filter_map(|&v| T::from(v))
+                    .map(|v| {
+                        let diff = v - mean;
+                        diff * diff
+                    })
+                    .sum::<T>()
+                    / count[row].into();
+
+                result[row] = variance;
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Calculate column-wise variance and store results in the provided slice
+    fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast,
+    {
+        let ncols = self.ncols();
+        if reference.len() != ncols {
+            return Err(anyhow::anyhow!(
+                "Reference slice length {} does not match number of columns {}",
+                reference.len(),
+                ncols
+            ));
+        }
+
+        let sum: Vec<T> = self.sum_col()?;
+        let count: Vec<I> = self.nonzero_col()?;
+        let mut squared_sums = vec![T::zero(); ncols];
+
+        // First pass: calculate squared sums for each column
+        for (value, &col) in self.values().iter().zip(self.col_indices().iter()) {
+            if let Some(val) = T::from(*value) {
+                squared_sums[col] += val * val;
+            }
+        }
+
+        // Second pass: calculate variances in-place
+        for col in 0..ncols {
+            reference[col] = if count[col] > I::zero() {
+                let mean = sum[col] / count[col].into();
+                squared_sums[col] / count[col].into() - mean * mean
+            } else {
+                T::zero()
+            };
+        }
+
+        Ok(())
+    }
+
+    fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        Self::Item: num_traits::NumCast,
+    {
+        let nrows = self.nrows();
+        if reference.len() != nrows {
+            return Err(anyhow::anyhow!(
+                "Reference slice length {} does not match number of rows {}",
+                reference.len(),
+                nrows
+            ));
+        }
+
+        let sum: Vec<T> = self.sum_row()?;
+        let count: Vec<I> = self.nonzero_row()?;
+
+        // Calculate variance for each row in-place
+        for row in 0..nrows {
+            let row_start = self.row_offsets()[row];
+            let row_end = self
+                .row_offsets()
+                .get(row + 1)
+                .copied()
+                .unwrap_or(self.values().len());
+
+            reference[row] = if count[row] > I::zero() {
+                let mean = sum[row] / count[row].into();
+
+                // Calculate variance for this row
+                self.values()[row_start..row_end]
+                    .iter()
+                    .filter_map(|&v| T::from(v))
+                    .map(|v| {
+                        let diff = v - mean;
+                        diff * diff
+                    })
+                    .sum::<T>()
+                    / count[row].into()
+            } else {
+                T::zero()
+            };
+        }
+
+        Ok(())
+    }
+}
+
+impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> {
+    type Item = M;
+
+    fn min_max_col<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let mut min: Vec<Item> = vec![Item::max_value(); self.ncols()];
+        let mut max: Vec<Item> = vec![Item::min_value(); self.ncols()];
+
+        self.min_max_col_chunk((&mut min, &mut max))?;
+        Ok((min, max))
+    }
+
+    fn min_max_row<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let mut min: Vec<Item> = vec![Item::max_value(); self.nrows()];
+        let mut max: Vec<Item> = vec![Item::min_value(); self.nrows()];
+
+        self.min_max_row_chunk((&mut min, &mut max))?;
+        Ok((min, max))
+    }
+
+    fn min_max_col_chunk<Item>(
+        &self,
+        reference: (&mut Vec<Item>, &mut Vec<Item>),
+    ) -> anyhow::Result<()>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let (min_vals, max_vals) = reference;
+
+        let row_offsets = self.row_offsets();
+        let col_indices = self.col_indices();
+        let values = self.values();
+
+        // For CsrMatrix, we need to traverse row by row
+        for row in 0..self.nrows() {
+            let start_idx = row_offsets[row];
+            let end_idx = row_offsets[row + 1];
+
+            // Process each non-zero element in this row
+            for idx in start_idx..end_idx {
+                let col = col_indices[idx];
+                let value = Item::from(values[idx]).unwrap();
+
+                // Update column minimum
+                if value < min_vals[col] {
+                    min_vals[col] = value;
+                }
+
+                // Update column maximum
+                if value > max_vals[col] {
+                    max_vals[col] = value;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn min_max_row_chunk<Item>(
+        &self,
+        reference: (&mut Vec<Item>, &mut Vec<Item>),
+    ) -> anyhow::Result<()>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let (min_vals, max_vals) = reference;
+
+        let row_offsets = self.row_offsets();
+        let values = self.values();
+
+        (0..self.nrows()).for_each(|row| {
+            let start_idx = row_offsets[row];
+            let end_idx = row_offsets[row + 1];
+
+            if start_idx < end_idx {
+                let first_value = Item::from(values[start_idx]).unwrap();
+                let mut row_min = first_value;
+                let mut row_max = first_value;
+
+                for &value in &values[start_idx..end_idx] {
+                    let value_cast = Item::from(value).unwrap();
+
+                    if value_cast < row_min {
+                        row_min = value_cast;
+                    }
+
+                    if value_cast > row_max {
+                        row_max = value_cast;
+                    }
+                }
+
+                min_vals[row] = row_min;
+                max_vals[row] = row_max;
+            }
+        });
+
         Ok(())
     }
 }

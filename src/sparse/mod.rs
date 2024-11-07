@@ -2,6 +2,8 @@ use std::ops::AddAssign;
 
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 
+use crate::NumericOps;
+
 pub mod csc;
 pub mod csr;
 
@@ -76,19 +78,21 @@ pub trait MatrixVariance {
 }
 
 pub trait MatrixMinMax {
-    fn min_max_col<T>(&self) -> anyhow::Result<(Vec<T>, Vec<T>)>
-    where
-        T: NumCast + Copy + PartialOrd;
+    type Item;
 
-    fn min_max_row<T>(&self) -> anyhow::Result<(Vec<T>, Vec<T>)>
+    fn min_max_col<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        T: NumCast + Copy + PartialOrd;
+        Item: NumCast + Copy + PartialOrd + NumericOps;
 
-    fn min_max_col_chunk<T>(&self, reference: &mut (Vec<T>, Vec<T>)) -> anyhow::Result<()>
+    fn min_max_row<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        T: NumCast + Copy + PartialOrd;
+        Item: NumCast + Copy + PartialOrd + NumericOps;
 
-    fn min_max_row_chunk<T>(&self, reference: &mut (Vec<T>, Vec<T>)) -> anyhow::Result<()>
+    fn min_max_col_chunk<Item>(&self, reference: (&mut Vec<Item>, &mut Vec<Item>)) -> anyhow::Result<()>
     where
-        T: NumCast + Copy + PartialOrd;
+        Item: NumCast + Copy + PartialOrd + NumericOps;
+
+    fn min_max_row_chunk<Item>(&self, reference: (&mut Vec<Item>, &mut Vec<Item>)) -> anyhow::Result<()>
+    where
+        Item: NumCast + Copy + PartialOrd + NumericOps;
 }

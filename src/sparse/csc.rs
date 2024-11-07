@@ -1,13 +1,13 @@
 use std::ops::AddAssign;
 
 use nalgebra_sparse::CscMatrix;
-use num_traits::{PrimInt, Unsigned, Zero};
+use num_traits::{NumCast, PrimInt, Unsigned, Zero};
 
 use crate::NumericOps;
 
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 
-use super::{MatrixNonZero, MatrixSum, MatrixVariance};
+use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
 
 impl<M: NumericOps> MatrixNonZero for CscMatrix<M> {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -251,6 +251,106 @@ impl<M: NumericOps> MatrixVariance for CscMatrix<M> {
                 reference[row] = squared_sum[row] / count[row].into() - mean * mean;
             } else {
                 reference[row] = T::zero();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> {
+    type Item = M;
+
+    fn min_max_col<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let mut min: Vec<Item> = vec![Item::min_value(); self.ncols()];
+        let mut max: Vec<Item> = vec![Item::max_value(); self.ncols()];
+
+        self.min_max_col_chunk((&mut min, &mut max))?;
+        Ok((min, max))
+    }
+
+    fn min_max_row<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let mut min: Vec<Item> = vec![Item::min_value(); self.nrows()];
+        let mut max: Vec<Item> = vec![Item::max_value(); self.nrows()];
+
+        self.min_max_row_chunk((&mut min, &mut max))?;
+        Ok((min, max))
+    }
+
+    fn min_max_col_chunk<Item>(
+        &self,
+        reference: (&mut Vec<Item>, &mut Vec<Item>),
+    ) -> anyhow::Result<()>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let (min_vals, max_vals) = reference;
+
+        let col_offsets = self.col_offsets();
+        let values = self.values();
+
+        (0..self.ncols()).for_each(|col| {
+            let start_idx = col_offsets[col];
+            let end_idx = col_offsets[col + 1];
+
+            if start_idx < end_idx {
+                let first_value = Item::from(values[start_idx]).unwrap();
+                let mut col_min = first_value;
+                let mut col_max = first_value;
+
+                for &value in &values[start_idx..end_idx] {
+                    let value_cast = Item::from(value).unwrap();
+
+                    if value_cast < col_min {
+                        col_min = value_cast;
+                    }
+
+                    if value_cast > col_max {
+                        col_max = value_cast;
+                    }
+                }
+                min_vals[col] = col_min;
+                max_vals[col] = col_max;
+            }
+        });
+
+        Ok(())
+    }
+
+    fn min_max_row_chunk<Item>(
+        &self,
+        reference: (&mut Vec<Item>, &mut Vec<Item>),
+    ) -> anyhow::Result<()>
+    where
+        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+    {
+        let (min_vals, max_vals) = reference;
+
+        let col_offsets = self.col_offsets();
+        let row_indices = self.row_indices();
+
+        let values = self.values();
+
+        for col in 0..self.ncols() {
+            let start_idx = row_indices[col];
+            let end_idx = col_offsets[col + 1];
+
+            for idx in start_idx..end_idx {
+                let row = row_indices[idx];
+                let value: Item = Item::from(values[idx]).unwrap();
+
+                if value < min_vals[row] {
+                    min_vals[row] = value;
+                }
+
+                if value > max_vals[row] {
+                    max_vals[row] = value;
+                }
             }
         }
         Ok(())
