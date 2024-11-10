@@ -123,14 +123,17 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
     }
 }
 
-impl<M: NumericOps> MatrixVariance for CsrMatrix<M> {
+impl<M> MatrixVariance for CsrMatrix<M>
+where 
+    M: NumericOps + NumCast,
+    CsrMatrix<M>: MatrixSum + MatrixNonZero
+{
     type Item = M;
 
     fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
         T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast + MatrixSum + MatrixNonZero,
     {
         let sum: Vec<T> = self.sum_col()?;
         let count: Vec<I> = self.nonzero_col()?;
@@ -158,7 +161,7 @@ impl<M: NumericOps> MatrixVariance for CsrMatrix<M> {
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
         T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast + MatrixSum + MatrixNonZero,
+        Self::Item: num_traits::NumCast + ,
     {
         let sum: Vec<T> = self.sum_row()?;
         let count: Vec<I> = self.nonzero_row()?;
