@@ -72,8 +72,8 @@ impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
 }
 
 impl<M> MatrixSum for CscMatrix<M>
-where 
-    M: NumericOps + NumCast
+where
+    M: NumericOps + NumCast,
 {
     type Item = M;
 
@@ -127,10 +127,10 @@ where
     }
 }
 
-impl<M> MatrixVariance for CscMatrix<M> 
-where 
+impl<M> MatrixVariance for CscMatrix<M>
+where
     CscMatrix<M>: MatrixSum + MatrixNonZero,
-    M: NumericOps + NumCast
+    M: NumericOps + NumCast,
 {
     type Item = M;
 
@@ -270,8 +270,8 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
     where
         Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
     {
-        let mut min: Vec<Item> = vec![Item::min_value(); self.ncols()];
-        let mut max: Vec<Item> = vec![Item::max_value(); self.ncols()];
+        let mut min: Vec<Item> = vec![Item::max_value(); self.ncols()];
+        let mut max: Vec<Item> = vec![Item::min_value(); self.ncols()];
 
         self.min_max_col_chunk((&mut min, &mut max))?;
         Ok((min, max))
@@ -281,8 +281,8 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
     where
         Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
     {
-        let mut min: Vec<Item> = vec![Item::min_value(); self.nrows()];
-        let mut max: Vec<Item> = vec![Item::max_value(); self.nrows()];
+        let mut min: Vec<Item> = vec![Item::max_value(); self.nrows()];
+        let mut max: Vec<Item> = vec![Item::min_value(); self.nrows()];
 
         self.min_max_row_chunk((&mut min, &mut max))?;
         Ok((min, max))
@@ -339,11 +339,10 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
         let col_offsets = self.col_offsets();
         let row_indices = self.row_indices();
-
         let values = self.values();
 
         for col in 0..self.ncols() {
-            let start_idx = row_indices[col];
+            let start_idx = col_offsets[col];
             let end_idx = col_offsets[col + 1];
 
             for idx in start_idx..end_idx {
@@ -370,23 +369,25 @@ mod tests {
 
     fn create_test_matrix() -> CscMatrix<f64> {
         use nalgebra_sparse::CooMatrix;
-        
+
         // Create initial matrix with triplets for:
         // [1.0, 0.0, 2.0]
         // [0.0, 3.0, 0.0]
         // [4.0, 0.0, 5.0]
         let mut coo = CooMatrix::try_from_triplets(
-            3, 3,
-            vec![0, 2],         // row indices
-            vec![0, 0],         // column indices
-            vec![1.0, 4.0]      // values
-        ).unwrap();
+            3,
+            3,
+            vec![0, 2],     // row indices
+            vec![0, 0],     // column indices
+            vec![1.0, 4.0], // values
+        )
+        .unwrap();
 
         // Push remaining entries
         coo.push(1, 1, 3.0);
         coo.push(0, 2, 2.0);
         coo.push(2, 2, 5.0);
-        
+
         // Convert to CscMatrix
         CscMatrix::from(&coo)
     }
@@ -550,5 +551,4 @@ mod tests {
             "All row minimums should be <= maximums"
         );
     }
-
 }
