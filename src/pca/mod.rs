@@ -225,9 +225,6 @@ mod tests {
     #[cfg(feature = "lapack")]
     use super::LapackSVD;
 
-    use super::PCABuilder;
-    use ndarray::array;
-
     #[cfg(feature = "lapack")]
     #[test]
     fn test_pca_with_lapack_svd() {
