@@ -2,6 +2,10 @@ use ndarray::{s, Array1, Array2, ArrayView2, Axis};
 use rayon::prelude::*;
 use std::sync::Arc;
 
+mod sparse;
+pub use sparse::SparsePCA;
+mod incremental;
+
 // Trait for SVD implementations
 pub trait SVDImplementation: Send + Sync {
     fn compute(&self, matrix: ArrayView2<f64>) -> (Array2<f64>, Array1<f64>, Array2<f64>);
