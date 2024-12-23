@@ -1,6 +1,6 @@
 [package]
 name = "single_algebra"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.4"
 edition = "2021"
 license-file = "LICENSE.md"
 description = "A linear algebra convenience library for the single-rust library. Can be used externally as well."
@@ -17,22 +17,22 @@ simba = ["dep:simba"]
 
 
 [dependencies]
-anyhow = "1.0.87"
+anyhow = "1.0.95"
 
-env_logger = "0.11.5"
-faer = {version = "0.19.3", optional = true}
-faer-ext = {version = "0.2.0", features = ["ndarray"], optional = true}
+env_logger = "0.11.6"
+faer = {version = "0.20.1", optional = true}
+faer-ext = {version = "0.4.1", features = ["ndarray"], optional = true}
 log = "0.4.22"
-nalgebra = {version = "0.30.1", features = ["serde-serialize"], optional = true}
-nalgebra-lapack = {version = "0.21.0", optional = true, default-features = false}
-nalgebra-sparse = "0.9.0"
-ndarray = {version = "0.15.6", features = ["rayon"]}
-nshare = {version = "0.9.0", features = ["ndarray", "nalgebra"]}
+nalgebra = {version = "0.33", features = ["serde-serialize"], optional = true}
+nalgebra-lapack = {version = "0.25.0", optional = true, default-features = false}
+nalgebra-sparse = "0.10"
+ndarray = {version = "0.16", features = ["rayon"]}
+nshare = {version = "0.10.0", features = ["ndarray", "nalgebra"]}
 num-traits = "0.2.19"
 rayon = "1.10.0"
 simba = {version = "0.9.0", optional = true}
-smartcore = {version = "0.3.2", features=["ndarray-bindings"], optional = true}
-svdlibrs = "0.5.1"
+smartcore = {version = "0.4", features=["ndarray-bindings"], optional = true}
+single-svdlib = "0.1.0"
 
 [dev-dependencies] 
 approx = "0.5.1"

@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use nalgebra_sparse::CsrMatrix;
 use ndarray::{Array1, Array2};
-use svdlibrs::svdLAS2;
+use single_svdlib::svdLAS2;
 
 use crate::sparse::MatrixSum;
 
@@ -192,16 +192,7 @@ impl SparsePCA {
 
         let mut explained_variance = Array1::zeros(self.n_components);
         for k in 0..self.n_components {
-            let mut variance = 0.0;
-            for (row_idx, row) in x.row_iter().enumerate() {
-                let mut projection = 0.0;
-                for &col_idx in row.col_indices() {
-                    let val = row.get_entry(col_idx).unwrap().into_value();
-                    let centered_val = val - mean[col_idx];
-                    projection += centered_val * self.components_.as_ref().unwrap()[[k, col_idx]];
-                }
-                variance += projection * projection;
-            }
+            let variance = u.column(k).iter().map(|&x| x * x).sum::<f64>();
             explained_variance[k] = variance / (n_samples as f64 - 1.0);
         }
         self.explained_variance_ = Some(explained_variance);
