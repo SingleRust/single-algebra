@@ -222,6 +222,9 @@ impl SVDImplementation for FaerSVD {
 
 #[cfg(test)]
 mod tests {
+    use ndarray::array;
+
+    use crate::pca::PCABuilder;
 
     #[cfg(feature = "faer")]
     use super::FaerSVD;
@@ -232,6 +235,8 @@ mod tests {
     #[cfg(feature = "lapack")]
     #[test]
     fn test_pca_with_lapack_svd() {
+        
+
         let x = array![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]];
         let mut pca = PCABuilder::new(LapackSVD).n_components(2).build();
 

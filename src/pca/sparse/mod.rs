@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use nalgebra_sparse::CsrMatrix;
-use ndarray::{Array1, Array2};
+use ndarray::{s, Array1, Array2};
 use single_svdlib::svdLAS2;
 
 use crate::sparse::MatrixSum;
@@ -66,12 +66,7 @@ impl SparsePCA {
         .map_err(|e| anyhow::anyhow!("SVD computation failed: {}", e))?;
 
         // Changed this line to use n_features instead of n_samples
-        let mut components = Array2::zeros((self.n_components, n_features));
-        for i in 0..self.n_components {
-            for j in 0..n_features {
-                components[[i, j]] = svd.vt[[i, j]];
-            }
-        }
+        let components = svd.vt.slice(s![..self.n_components, ..]).to_owned();
 
         if self.verbose {
             println!("Dimensionality reduction summary:");
@@ -192,7 +187,7 @@ impl SparsePCA {
 
         let mut explained_variance = Array1::zeros(self.n_components);
         for k in 0..self.n_components {
-            let variance = u.column(k).iter().map(|&x| x * x).sum::<f64>();
+            let variance = u.column(k).dot(&u.column(k));
             explained_variance[k] = variance / (n_samples as f64 - 1.0);
         }
         self.explained_variance_ = Some(explained_variance);

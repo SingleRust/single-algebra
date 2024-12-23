@@ -1,5 +1,5 @@
 use ndarray::{Array1, Array2, ArrayView2};
-use nshare::{ToNalgebra, ToNdarray2};
+use nshare::{IntoNalgebra, AsNdarray2};
 
 pub struct SVD {
     u: Option<Array2<f64>>,
@@ -20,9 +20,9 @@ impl SVD {
         let matrix = x.into_nalgebra().clone_owned();
 
         let svd = nalgebra_lapack::SVD::new(matrix).unwrap();
-        self.u = Some(svd.u.into_ndarray2());
+        self.u = Some(svd.u.as_ndarray2().to_owned());
         self.s = Some(Array1::from(svd.singular_values.as_slice().to_vec()));
-        self.vt = Some(svd.vt.into_ndarray2());
+        self.vt = Some(svd.vt.as_ndarray2().to_owned());
 
         Ok(())
     }
