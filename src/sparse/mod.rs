@@ -30,7 +30,7 @@ pub trait MatrixSum {
 
     fn sum_col<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,;
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum;
 
     fn sum_row<T>(&self) -> anyhow::Result<Vec<T>>
     where
@@ -61,7 +61,7 @@ pub trait MatrixVariance {
     fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,;
+        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum;
 
     fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
@@ -80,11 +80,17 @@ pub trait MatrixMinMax {
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 
-    fn min_max_col_chunk<Item>(&self, reference: (&mut Vec<Item>, &mut Vec<Item>)) -> anyhow::Result<()>
+    fn min_max_col_chunk<Item>(
+        &self,
+        reference: (&mut Vec<Item>, &mut Vec<Item>),
+    ) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 
-    fn min_max_row_chunk<Item>(&self, reference: (&mut Vec<Item>, &mut Vec<Item>)) -> anyhow::Result<()>
+    fn min_max_row_chunk<Item>(
+        &self,
+        reference: (&mut Vec<Item>, &mut Vec<Item>),
+    ) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 }
