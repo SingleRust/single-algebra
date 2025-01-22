@@ -4,7 +4,10 @@ use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 
-use crate::NumericOps;
+use crate::{
+    utils::{Normalize, NumericNormalize},
+    NumericOps,
+};
 
 use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
 
@@ -124,9 +127,9 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 }
 
 impl<M> MatrixVariance for CsrMatrix<M>
-where 
+where
     M: NumericOps + NumCast,
-    CsrMatrix<M>: MatrixSum + MatrixNonZero
+    CsrMatrix<M>: MatrixSum + MatrixNonZero,
 {
     type Item = M;
 
@@ -161,7 +164,7 @@ where
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
         T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast + ,
+        Self::Item: num_traits::NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
         let count: Vec<I> = self.nonzero_row()?;
@@ -390,8 +393,41 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
     }
 }
 
+impl<T: NumericNormalize> Normalize<T> for CsrMatrix<T> {
+    fn normalize<U: NumericNormalize>(
+        &mut self,
+        sums: &[U],
+        target: U,
+        direction: &crate::Direction,
+    ) -> anyhow::Result<()> {
+        match direction {
+            crate::Direction::COLUMN => {
+                for (_, col, val) in self.triplet_iter_mut() {
+                    if sums[col] > U::zero() {
+                        *val = T::from(U::from(*val).unwrap() * (target / sums[col])).unwrap();
+                    }
+                }
+            }
+            crate::Direction::ROW => {
+                let mut curr_row = 0;
+                for (row, _, val) in self.triplet_iter_mut() {
+                    if row != curr_row {
+                        curr_row = row;
+                    }
+                    if sums[row] > U::zero() {
+                        *val = T::from(U::from(*val).unwrap() * (target / sums[row])).unwrap();
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::Direction;
+
     use super::*;
     use nalgebra_sparse::{CooMatrix, CscMatrix};
 
@@ -523,5 +559,42 @@ mod tests {
 
         let row_result: Vec<u32> = matrix.nonzero_row().unwrap();
         assert_eq!(row_result, vec![0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_csr_normalize() {
+        // Create a simple CSR matrix from COO format
+        let coo = CooMatrix::try_from_triplets(
+            3,
+            3,
+            vec![0, 0, 1, 1, 2],           // row indices
+            vec![0, 1, 1, 2, 2],           // col indices
+            vec![2.0, 3.0, 4.0, 1.0, 2.0], // values
+        )
+        .unwrap();
+        let mut csr: CsrMatrix<f64> = (&coo).into();
+
+        // Test column normalization
+        let col_sums = vec![2.0, 7.0, 3.0]; // Sum of each column
+        let target = 1.0;
+        csr.normalize(&col_sums, target, &Direction::COLUMN)
+            .unwrap();
+
+        // Verify results
+        let expected_values = vec![1.0, 3.0 / 7.0, 4.0 / 7.0, 1.0 / 3.0, 2.0 / 3.0];
+        for ((_, _, val), expected) in csr.triplet_iter().zip(expected_values.iter()) {
+            assert!((val - expected).abs() < 1e-10);
+        }
+
+        // Test row normalization
+        let mut csr: CsrMatrix<f64> = (&coo).into(); // Reset matrix
+        let row_sums = vec![5.0, 5.0, 2.0]; // Sum of each row
+        csr.normalize(&row_sums, target, &Direction::ROW).unwrap();
+
+        // Verify results
+        let expected_values = vec![0.4, 0.6, 0.8, 0.2, 1.0];
+        for ((_, _, val), expected) in csr.triplet_iter().zip(expected_values.iter()) {
+            assert!((val - expected).abs() < 1e-10);
+        }
     }
 }

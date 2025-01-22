@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "single_algebra"
-version = "0.1.1-alpha.5"
+version = "0.1.1-alpha.6"
 dependencies = [
  "anyhow",
  "approx",

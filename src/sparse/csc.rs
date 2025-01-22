@@ -3,7 +3,10 @@ use std::ops::AddAssign;
 use nalgebra_sparse::CscMatrix;
 use num_traits::{NumCast, PrimInt, Unsigned, Zero};
 
-use crate::NumericOps;
+use crate::{
+    utils::{Normalize, NumericNormalize},
+    NumericOps,
+};
 
 use anyhow::anyhow;
 
@@ -364,8 +367,10 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
 #[cfg(test)]
 mod tests {
+    use crate::Direction;
+
     use super::*;
-    use nalgebra_sparse::CscMatrix;
+    use nalgebra_sparse::{CooMatrix, CscMatrix};
 
     fn create_test_matrix() -> CscMatrix<f64> {
         use nalgebra_sparse::CooMatrix;
@@ -550,5 +555,84 @@ mod tests {
                 .all(|(min, max)| min <= max),
             "All row minimums should be <= maximums"
         );
+    }
+
+    #[test]
+    fn test_csc_normalization() {
+        // Create test matrix:
+        // 2 0 3
+        // 0 4 0
+        // 1 0 5
+        let coo = CooMatrix::try_from_triplets(
+            3,
+            3,
+            vec![0, 1, 2, 0, 2],
+            vec![0, 1, 0, 2, 2],
+            vec![2.0, 4.0, 1.0, 3.0, 5.0_f64],
+        )
+        .unwrap();
+        let mut csc: CscMatrix<f64> = (&coo).into();
+
+        // Test column normalization
+        let col_sums = vec![3.0, 4.0, 8.0];
+        let target = 1.0;
+        csc.normalize(&col_sums, target, &Direction::COLUMN)
+            .unwrap();
+
+        // Verify each column sums to target
+        let (cols, rows, vals) = csc.csc_data();
+        let mut col_sums_after = vec![0.0; 3];
+        for i in 0..cols.len() - 1 {
+            for j in cols[i]..cols[i + 1] {
+                col_sums_after[i] += vals[j];
+            }
+            assert!((col_sums_after[i] - target).abs() < 1e-10);
+        }
+
+        // Test row normalization
+        let mut csc: CscMatrix<f64> = (&coo).into();
+        let row_sums = vec![5.0, 4.0, 6.0];
+        csc.normalize(&row_sums, target, &Direction::ROW).unwrap();
+
+        // Verify each row sums to target
+        let mut row_sums_after = vec![0.0; 3];
+        for (r, _, v) in csc.triplet_iter() {
+            row_sums_after[r] += v;
+        }
+        for sum in row_sums_after {
+            assert!((sum - target).abs() < 1e-10);
+        }
+    }
+}
+
+impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
+    fn normalize<U: NumericNormalize>(
+        &mut self,
+        sums: &[U],
+        target: U,
+        direction: &crate::Direction,
+    ) -> anyhow::Result<()> {
+        match direction {
+            crate::Direction::COLUMN => {
+                let mut curr_col = 0;
+                for (_, col, val) in self.triplet_iter_mut() {
+                    if col != curr_col {
+                        curr_col = col;
+                    }
+
+                    if sums[col] > U::zero() {
+                        *val = T::from(U::from(*val).unwrap() * (target / sums[col])).unwrap();
+                    }
+                }
+            }
+            crate::Direction::ROW => {
+                for (row, _, val) in self.triplet_iter_mut() {
+                    if sums[row] > U::zero() {
+                        *val = T::from(U::from(*val).unwrap() * (target / sums[row])).unwrap();
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
