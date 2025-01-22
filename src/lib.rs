@@ -6,4 +6,6 @@ mod utils;
 
 pub use utils::Direction;
 pub use utils::FloatOps;
+pub use utils::Normalize;
+pub use utils::NumericNormalize;
 pub use utils::NumericOps;
