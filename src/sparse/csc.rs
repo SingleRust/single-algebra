@@ -1,5 +1,5 @@
 use std::{ops::AddAssign};
-
+use std::ops::Add;
 use nalgebra_sparse::CscMatrix;
 use num_traits::{NumCast, PrimInt, Unsigned, Zero};
 
@@ -9,7 +9,6 @@ use crate::{
 };
 
 use anyhow::anyhow;
-
 use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
 
 impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
@@ -73,41 +72,68 @@ impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
         Ok(())
     }
 
-    /*fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
+    #[cfg(feature = "simba")]
+    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T::Element>>
     where
-        T: simba::simd::PrimitiveSimdValue
-            + Unsigned
-            + AddAssign
-            + simba::simd::SimdValue
-            + simba::simd::SimdPartialOrd,
+        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
+        T::Element: PrimInt + Unsigned + Zero + AddAssign + NumCast,
     {
-        let offsets = self.col_offsets();
-        let mut result = Vec::with_capacity(self.ncols());
-        let windows: Vec<_> = offsets.windows(2).collect();
-        
-        // Process in SIMD chunks
-        for chunk in windows.chunks(T::LANES) {
-            // Initialize SIMD register with zeros
-            let mut diffs = T::zero();
-            
-            // Fill SIMD lanes with differences
-            for (i, window) in chunk.iter().enumerate() {
-                let diff = window[1]
-                    .checked_sub(window[0])
-                    .ok_or_else(|| anyhow::anyhow!("Offset difference overflow"))?;
-                    
-                let diff_t = T::from(diff)
-                    .ok_or_else(|| anyhow::anyhow!("Failed to convert offset difference"))?;
-                
-                diffs.replace(i, diff_t);
+        let col_offsets = self.col_offsets();
+        let n = col_offsets.len() - 1;
+        let simd_lanes = T::LANES;
+        let mut result = Vec::with_capacity(n);
+
+        // Process chunks of size SIMD lanes
+        let chunks = n / simd_lanes;
+        for chunk_idx in 0..chunks {
+            let start_idx = chunk_idx * simd_lanes;
+            let mut elements = Vec::with_capacity(simd_lanes);
+
+            // Process each lane
+            for lane in 0..simd_lanes {
+                let idx = start_idx + lane;
+                let diff = col_offsets[idx + 1]
+                    .checked_sub(col_offsets[idx])
+                    .ok_or_else(|| anyhow::anyhow!("Subtraction overflow"))?;
+
+                let elem = NumCast::from(diff)
+                    .ok_or_else(|| anyhow::anyhow!("Failed to convert to target type"))?;
+                elements.push(elem);
             }
-            
-            // Extract and store results
-            result.extend_from_slice(&diffs.convert());
+
+            // Add elements to result directly
+            result.extend_from_slice(&elements);
         }
-        
+
+        // Handle remaining elements
+        let remaining_start = chunks * simd_lanes;
+        for idx in remaining_start..n {
+            let diff = col_offsets[idx + 1]
+                .checked_sub(col_offsets[idx])
+                .ok_or_else(|| anyhow::anyhow!("Subtraction overflow"))?;
+
+            let elem = NumCast::from(diff)
+                .ok_or_else(|| anyhow::anyhow!("Failed to convert to target type"))?;
+            result.push(elem);
+        }
+
         Ok(result)
-    }*/
+    }
+    #[cfg(feature = "simba")]
+    fn simba_nonzero_row<T>(&self) -> anyhow::Result<Vec<T::Element>>
+    where
+        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
+        T::Element: PrimInt + Unsigned + Zero + AddAssign + NumCast,
+    {
+        let mut result = vec![T::Element::zero(); self.nrows()];
+
+        // Count occurrences of each row index
+        for &row_index in self.row_indices() {
+            result[row_index] = result[row_index].add(NumCast::from(1).unwrap());
+        }
+
+        Ok(result)
+    }
 }
 
 impl<M> MatrixSum for CscMatrix<M>
@@ -670,5 +696,27 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "simba"))]
+mod tests_simd {
+    use super::*;
+
+    #[test]
+    fn test_csc_nonzero_simd() {
+        // Create test matrix
+        let indices = vec![0, 1, 0, 1, 0, 1];
+        let indptr = vec![0, 2, 4, 6];
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let matrix = CscMatrix::try_from_csc_data(3, 3, indptr, indices, data).unwrap();
+
+        // Test column counts
+        let col_result = matrix.simba_nonzero_col::<u32>().unwrap();
+        assert_eq!(col_result, vec![2, 2, 2]);
+
+        // Test row counts
+        let row_result = matrix.simba_nonzero_row::<u32>().unwrap();
+        assert_eq!(row_result, vec![3, 3, 0]);
     }
 }

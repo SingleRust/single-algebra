@@ -1,9 +1,8 @@
-use std::ops::AddAssign;
+use std::ops::{Add, AddAssign};
 
 use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
-use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
-
+use num_traits::{Float, NumCast, One, PrimInt, Unsigned, Zero};
 use crate::{
     utils::{Normalize, NumericNormalize},
     NumericOps,
@@ -70,6 +69,43 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
             }
         }
         Ok(())
+    }
+
+    #[cfg(feature = "simba")]
+    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T::Element>>
+    where
+        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
+        T::Element: PrimInt + Unsigned + Zero + AddAssign
+    {
+        let mut result = vec![T::Element::zero(); self.ncols()];
+        for &col_index in self.col_indices() {
+            result[col_index] = result[col_index].add(T::Element::one());
+        }
+        Ok(result)
+    }
+
+    #[cfg(feature = "simba")]
+    fn simba_nonzero_row<T>(&self) -> anyhow::Result<Vec<T::Element>>
+    where
+        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
+        T::Element: PrimInt + Unsigned + Zero + AddAssign + NumCast,
+    {
+        let row_offsets = self.row_offsets();
+        let mut result = Vec::with_capacity(self.nrows());
+
+        // Process adjacent pairs in row_offsets to get number of nonzeros in each row
+        for window in row_offsets.windows(2) {
+            let diff = window[1]
+                .checked_sub(window[0])
+                .ok_or_else(|| anyhow::anyhow!("Subtraction overflow"))?;
+
+            let elem = NumCast::from(diff)
+                .ok_or_else(|| anyhow::anyhow!("Failed to convert to target type"))?;
+
+            result.push(elem);
+        }
+
+        Ok(result)
     }
 }
 
@@ -459,6 +495,19 @@ mod tests {
 
         // Expected number of nonzero elements in each column
         assert_eq!(result, vec![2, 2, 2]);
+    }
+
+
+    #[test]
+    #[cfg(feature = "simba")]
+    fn test_nonzero_col_simba() {
+        use simba::simd;
+        let matrix = create_test_matrix();
+        let result: Vec<u32> = matrix.nonzero_col().unwrap();
+        let simd_result = matrix.simba_nonzero_col::<u32>().unwrap();
+        // Expected number of nonzero elements in each column
+        assert_eq!(result, vec![2, 2, 2]);
+        assert_eq!(simd_result, vec![2, 2, 2]);
     }
 
     #[test]

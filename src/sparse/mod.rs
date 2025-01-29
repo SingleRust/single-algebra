@@ -1,8 +1,6 @@
 use std::ops::AddAssign;
 
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
-#[cfg(feature="simba")]
-use simba::simd::{SimdValue, SimdPartialOrd};
 
 use crate::NumericOps;
 
@@ -26,10 +24,17 @@ pub trait MatrixNonZero {
     where
         T: PrimInt + Unsigned + Zero + AddAssign;
 
-    /*#[cfg(feature = "simba")]
-    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
-    where 
-        T: PrimInt + Unsigned + Zero + AddAssign + SimdValue + SimdPartialOrd;*/
+    #[cfg(feature = "simba")]
+    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T::Element>>
+    where
+        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
+        T::Element: PrimInt + Unsigned + Zero + AddAssign;
+
+    #[cfg(feature = "simba")]
+    fn simba_nonzero_row<T>(&self) -> anyhow::Result<Vec<T::Element>>
+    where
+        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
+        T::Element: PrimInt + Unsigned + Zero + AddAssign;
 }
 
 pub trait MatrixSum {
