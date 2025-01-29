@@ -1,4 +1,4 @@
-use std::ops::AddAssign;
+use std::{ops::AddAssign};
 
 use nalgebra_sparse::CscMatrix;
 use num_traits::{NumCast, PrimInt, Unsigned, Zero};
@@ -72,6 +72,42 @@ impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
         }
         Ok(())
     }
+
+    /*fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
+    where
+        T: simba::simd::PrimitiveSimdValue
+            + Unsigned
+            + AddAssign
+            + simba::simd::SimdValue
+            + simba::simd::SimdPartialOrd,
+    {
+        let offsets = self.col_offsets();
+        let mut result = Vec::with_capacity(self.ncols());
+        let windows: Vec<_> = offsets.windows(2).collect();
+        
+        // Process in SIMD chunks
+        for chunk in windows.chunks(T::LANES) {
+            // Initialize SIMD register with zeros
+            let mut diffs = T::zero();
+            
+            // Fill SIMD lanes with differences
+            for (i, window) in chunk.iter().enumerate() {
+                let diff = window[1]
+                    .checked_sub(window[0])
+                    .ok_or_else(|| anyhow::anyhow!("Offset difference overflow"))?;
+                    
+                let diff_t = T::from(diff)
+                    .ok_or_else(|| anyhow::anyhow!("Failed to convert offset difference"))?;
+                
+                diffs.replace(i, diff_t);
+            }
+            
+            // Extract and store results
+            result.extend_from_slice(&diffs.convert());
+        }
+        
+        Ok(result)
+    }*/
 }
 
 impl<M> MatrixSum for CscMatrix<M>
@@ -293,7 +329,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
     fn min_max_col_chunk<Item>(
         &self,
-        reference: (&mut Vec<Item>, &mut Vec<Item>),
+        reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
         Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
@@ -333,7 +369,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
     fn min_max_row_chunk<Item>(
         &self,
-        reference: (&mut Vec<Item>, &mut Vec<Item>),
+        reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
         Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,

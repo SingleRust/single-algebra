@@ -315,7 +315,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
 
     fn min_max_col_chunk<Item>(
         &self,
-        reference: (&mut Vec<Item>, &mut Vec<Item>),
+        reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
         Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
@@ -353,7 +353,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
 
     fn min_max_row_chunk<Item>(
         &self,
-        reference: (&mut Vec<Item>, &mut Vec<Item>),
+        reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
         Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
