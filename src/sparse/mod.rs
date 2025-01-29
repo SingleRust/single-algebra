@@ -1,6 +1,8 @@
 use std::ops::AddAssign;
 
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
+#[cfg(feature="simba")]
+use simba::simd::{SimdValue, SimdPartialOrd};
 
 use crate::NumericOps;
 
@@ -23,6 +25,11 @@ pub trait MatrixNonZero {
     fn nonzero_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         T: PrimInt + Unsigned + Zero + AddAssign;
+
+    /*#[cfg(feature = "simba")]
+    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
+    where 
+        T: PrimInt + Unsigned + Zero + AddAssign + SimdValue + SimdPartialOrd;*/
 }
 
 pub trait MatrixSum {
@@ -82,14 +89,14 @@ pub trait MatrixMinMax {
 
     fn min_max_col_chunk<Item>(
         &self,
-        reference: (&mut Vec<Item>, &mut Vec<Item>),
+        reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 
     fn min_max_row_chunk<Item>(
         &self,
-        reference: (&mut Vec<Item>, &mut Vec<Item>),
+        reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
