@@ -23,18 +23,6 @@ pub trait MatrixNonZero {
     fn nonzero_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         T: PrimInt + Unsigned + Zero + AddAssign;
-
-    #[cfg(feature = "simba")]
-    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T::Element>>
-    where
-        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
-        T::Element: PrimInt + Unsigned + Zero + AddAssign;
-
-    #[cfg(feature = "simba")]
-    fn simba_nonzero_row<T>(&self) -> anyhow::Result<Vec<T::Element>>
-    where
-        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
-        T::Element: PrimInt + Unsigned + Zero + AddAssign;
 }
 
 pub trait MatrixSum {
@@ -92,17 +80,11 @@ pub trait MatrixMinMax {
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 
-    fn min_max_col_chunk<Item>(
-        &self,
-        reference: (&mut [Item], &mut [Item]),
-    ) -> anyhow::Result<()>
+    fn min_max_col_chunk<Item>(&self, reference: (&mut [Item], &mut [Item])) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 
-    fn min_max_row_chunk<Item>(
-        &self,
-        reference: (&mut [Item], &mut [Item]),
-    ) -> anyhow::Result<()>
+    fn min_max_row_chunk<Item>(&self, reference: (&mut [Item], &mut [Item])) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 }
