@@ -1,12 +1,12 @@
 use std::ops::{Add, AddAssign};
 
-use anyhow::{anyhow, Ok};
-use nalgebra_sparse::CsrMatrix;
-use num_traits::{Float, NumCast, One, PrimInt, Unsigned, Zero};
 use crate::{
     utils::{Normalize, NumericNormalize},
     NumericOps,
 };
+use anyhow::{anyhow, Ok};
+use nalgebra_sparse::CsrMatrix;
+use num_traits::{Float, NumCast, One, PrimInt, Unsigned, Zero};
 
 use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
 
@@ -70,43 +70,6 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
         }
         Ok(())
     }
-
-    #[cfg(feature = "simba")]
-    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T::Element>>
-    where
-        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
-        T::Element: PrimInt + Unsigned + Zero + AddAssign
-    {
-        let mut result = vec![T::Element::zero(); self.ncols()];
-        for &col_index in self.col_indices() {
-            result[col_index] = result[col_index].add(T::Element::one());
-        }
-        Ok(result)
-    }
-
-    #[cfg(feature = "simba")]
-    fn simba_nonzero_row<T>(&self) -> anyhow::Result<Vec<T::Element>>
-    where
-        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
-        T::Element: PrimInt + Unsigned + Zero + AddAssign + NumCast,
-    {
-        let row_offsets = self.row_offsets();
-        let mut result = Vec::with_capacity(self.nrows());
-
-        // Process adjacent pairs in row_offsets to get number of nonzeros in each row
-        for window in row_offsets.windows(2) {
-            let diff = window[1]
-                .checked_sub(window[0])
-                .ok_or_else(|| anyhow::anyhow!("Subtraction overflow"))?;
-
-            let elem = NumCast::from(diff)
-                .ok_or_else(|| anyhow::anyhow!("Failed to convert to target type"))?;
-
-            result.push(elem);
-        }
-
-        Ok(result)
-    }
 }
 
 impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
@@ -114,12 +77,24 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
     fn sum_col<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let mut result = vec![T::zero(); self.ncols()];
-        for (&col_indices, &value) in self.col_indices().iter().zip(self.values().iter()) {
-            result[col_indices] += T::from(value).unwrap();
+        let row_offsets = self.row_offsets();
+        let col_indices = self.col_indices();
+        let values = self.values();
+
+        // Process each row
+        for row in 0..self.nrows() {
+            let start = row_offsets[row];
+            let end = row_offsets[row + 1];
+
+            // Add each value to its corresponding column sum
+            for idx in start..end {
+                let col = col_indices[idx];
+                result[col] += T::from(values[idx]).unwrap();
+            }
         }
 
         Ok(result)
@@ -127,20 +102,33 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
     fn sum_row<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let mut result = vec![T::zero(); self.nrows()];
-        for (row, row_vec) in self.row_iter().enumerate() {
-            result[row] = row_vec.values().iter().map(|&v| T::from(v).unwrap()).sum();
+        let row_offsets = self.row_offsets();
+        let values = self.values();
+
+        // Process each row using direct slice operations
+        for row in 0..self.nrows() {
+            let start = row_offsets[row];
+            let end = row_offsets[row + 1];
+
+            // Sum values in this row's range
+            let sum = values[start..end]
+                .iter()
+                .fold(T::zero(), |acc, &v| acc + T::from(v).unwrap());
+
+            result[row] = sum;
         }
+
         Ok(result)
     }
 
     fn sum_col_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         for (&col_index, &value) in self.col_indices().iter().zip(self.values().iter()) {
             if col_index < reference.len() {
@@ -152,8 +140,8 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
     fn sum_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         for (row, row_vec) in self.row_iter().enumerate() {
             reference[row] = row_vec.values().iter().map(|&v| T::from(v).unwrap()).sum();
@@ -172,7 +160,7 @@ where
     fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
     {
         let sum: Vec<T> = self.sum_col()?;
         let count: Vec<I> = self.nonzero_col()?;
@@ -199,8 +187,8 @@ where
     fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
         let count: Vec<I> = self.nonzero_row()?;
@@ -239,8 +227,8 @@ where
     fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let ncols = self.ncols();
         if reference.len() != ncols {
@@ -278,8 +266,8 @@ where
     fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let nrows = self.nrows();
         if reference.len() != nrows {
@@ -329,7 +317,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
 
     fn min_max_col<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.ncols()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.ncols()];
@@ -340,7 +328,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
 
     fn min_max_row<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.nrows()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.nrows()];
@@ -349,12 +337,9 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
         Ok((min, max))
     }
 
-    fn min_max_col_chunk<Item>(
-        &self,
-        reference: (&mut [Item], &mut [Item]),
-    ) -> anyhow::Result<()>
+    fn min_max_col_chunk<Item>(&self, reference: (&mut [Item], &mut [Item])) -> anyhow::Result<()>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let (min_vals, max_vals) = reference;
 
@@ -387,12 +372,9 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
         Ok(())
     }
 
-    fn min_max_row_chunk<Item>(
-        &self,
-        reference: (&mut [Item], &mut [Item]),
-    ) -> anyhow::Result<()>
+    fn min_max_row_chunk<Item>(&self, reference: (&mut [Item], &mut [Item])) -> anyhow::Result<()>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let (min_vals, max_vals) = reference;
 
@@ -495,19 +477,6 @@ mod tests {
 
         // Expected number of nonzero elements in each column
         assert_eq!(result, vec![2, 2, 2]);
-    }
-
-
-    #[test]
-    #[cfg(feature = "simba")]
-    fn test_nonzero_col_simba() {
-        use simba::simd;
-        let matrix = create_test_matrix();
-        let result: Vec<u32> = matrix.nonzero_col().unwrap();
-        let simd_result = matrix.simba_nonzero_col::<u32>().unwrap();
-        // Expected number of nonzero elements in each column
-        assert_eq!(result, vec![2, 2, 2]);
-        assert_eq!(simd_result, vec![2, 2, 2]);
     }
 
     #[test]
@@ -630,7 +599,7 @@ mod tests {
             .unwrap();
 
         // Verify results
-        let expected_values = vec![1.0, 3.0 / 7.0, 4.0 / 7.0, 1.0 / 3.0, 2.0 / 3.0];
+        let expected_values = [1.0, 3.0 / 7.0, 4.0 / 7.0, 1.0 / 3.0, 2.0 / 3.0];
         for ((_, _, val), expected) in csr.triplet_iter().zip(expected_values.iter()) {
             assert!((val - expected).abs() < 1e-10);
         }
@@ -641,7 +610,7 @@ mod tests {
         csr.normalize(&row_sums, target, &Direction::ROW).unwrap();
 
         // Verify results
-        let expected_values = vec![0.4, 0.6, 0.8, 0.2, 1.0];
+        let expected_values = [0.4, 0.6, 0.8, 0.2, 1.0];
         for ((_, _, val), expected) in csr.triplet_iter().zip(expected_values.iter()) {
             assert!((val - expected).abs() < 1e-10);
         }

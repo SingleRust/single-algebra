@@ -1,15 +1,15 @@
-use std::{ops::AddAssign};
-use std::ops::Add;
 use nalgebra_sparse::CscMatrix;
-use num_traits::{NumCast, PrimInt, Unsigned, Zero};
+use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
+use std::ops::Add;
+use std::ops::AddAssign;
 
 use crate::{
     utils::{Normalize, NumericNormalize},
     NumericOps,
 };
 
-use anyhow::anyhow;
 use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
+use anyhow::anyhow;
 
 impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -71,69 +71,6 @@ impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
         }
         Ok(())
     }
-
-    #[cfg(feature = "simba")]
-    fn simba_nonzero_col<T>(&self) -> anyhow::Result<Vec<T::Element>>
-    where
-        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
-        T::Element: PrimInt + Unsigned + Zero + AddAssign + NumCast,
-    {
-        let col_offsets = self.col_offsets();
-        let n = col_offsets.len() - 1;
-        let simd_lanes = T::LANES;
-        let mut result = Vec::with_capacity(n);
-
-        // Process chunks of size SIMD lanes
-        let chunks = n / simd_lanes;
-        for chunk_idx in 0..chunks {
-            let start_idx = chunk_idx * simd_lanes;
-            let mut elements = Vec::with_capacity(simd_lanes);
-
-            // Process each lane
-            for lane in 0..simd_lanes {
-                let idx = start_idx + lane;
-                let diff = col_offsets[idx + 1]
-                    .checked_sub(col_offsets[idx])
-                    .ok_or_else(|| anyhow::anyhow!("Subtraction overflow"))?;
-
-                let elem = NumCast::from(diff)
-                    .ok_or_else(|| anyhow::anyhow!("Failed to convert to target type"))?;
-                elements.push(elem);
-            }
-
-            // Add elements to result directly
-            result.extend_from_slice(&elements);
-        }
-
-        // Handle remaining elements
-        let remaining_start = chunks * simd_lanes;
-        for idx in remaining_start..n {
-            let diff = col_offsets[idx + 1]
-                .checked_sub(col_offsets[idx])
-                .ok_or_else(|| anyhow::anyhow!("Subtraction overflow"))?;
-
-            let elem = NumCast::from(diff)
-                .ok_or_else(|| anyhow::anyhow!("Failed to convert to target type"))?;
-            result.push(elem);
-        }
-
-        Ok(result)
-    }
-    #[cfg(feature = "simba")]
-    fn simba_nonzero_row<T>(&self) -> anyhow::Result<Vec<T::Element>>
-    where
-        T: simba::simd::SimdValue + simba::simd::PrimitiveSimdValue,
-        T::Element: PrimInt + Unsigned + Zero + AddAssign + NumCast,
-    {
-        let mut result = vec![T::Element::zero(); self.nrows()];
-
-        // Count occurrences of each row index
-        for &row_index in self.row_indices() {
-            result[row_index] = result[row_index].add(NumCast::from(1).unwrap());
-        }
-
-        Ok(result)
-    }
 }
 
 impl<M> MatrixSum for CscMatrix<M>
@@ -144,31 +81,64 @@ where
 
     fn sum_col<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
     {
         let mut result = vec![T::zero(); self.ncols()];
-        for (col, col_vec) in self.col_iter().enumerate() {
-            result[col] = col_vec.values().iter().map(|&v| T::from(v).unwrap()).sum();
+
+        // Direct access to CSC matrix data
+        let col_offsets = self.col_offsets();
+        let values = self.values();
+
+        // Process each column using direct slice operations
+        for col in 0..self.ncols() {
+            let start = col_offsets[col];
+            let end = col_offsets[col + 1];
+
+            // Sum values in this column's range
+            let sum = values[start..end]
+                .iter()
+                .fold(T::zero(), |acc, &v| {
+                    acc + T::from(v).unwrap()
+                });
+
+            result[col] = sum;
         }
+
         Ok(result)
     }
 
     fn sum_row<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let mut result = vec![T::zero(); self.nrows()];
-        for (&row_index, &value) in self.row_indices().iter().zip(self.values().iter()) {
-            result[row_index] += T::from(value).unwrap();
+
+        // Get the matrix structure
+        let col_offsets = self.col_offsets();
+        let row_indices = self.row_indices();
+        let values = self.values();
+
+        // Process each column
+        for col in 0..self.ncols() {
+            let start = col_offsets[col];
+            let end = col_offsets[col + 1];
+
+            // For each value in this column, add it to the appropriate row sum
+            for idx in start..end {
+                let row = row_indices[idx];
+                let value = T::from(values[idx]).unwrap();
+                result[row] += value;
+            }
         }
+
         Ok(result)
     }
 
     fn sum_col_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         for (col, col_vec) in self.col_iter().enumerate() {
             if col < reference.len() {
@@ -180,8 +150,8 @@ where
 
     fn sum_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         for (&row_index, &value) in self.row_indices().iter().zip(self.values().iter()) {
             if row_index < reference.len() {
@@ -202,8 +172,8 @@ where
     fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
         let count: Vec<I> = self.nonzero_row()?;
@@ -228,8 +198,8 @@ where
     fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
         let count: Vec<I> = self.nonzero_row()?;
@@ -252,8 +222,8 @@ where
     fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         // Validate input slice length matches number of columns
         if reference.len() != self.ncols() {
@@ -291,8 +261,8 @@ where
     fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: num_traits::Float + num_traits::NumCast + AddAssign + std::iter::Sum,
-        Self::Item: num_traits::NumCast,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        Self::Item: NumCast,
     {
         // Validate input slice length matches number of rows
         if reference.len() != self.nrows() {
@@ -333,7 +303,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
     fn min_max_col<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.ncols()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.ncols()];
@@ -344,7 +314,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
     fn min_max_row<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.nrows()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.nrows()];
@@ -358,7 +328,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
         reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let (min_vals, max_vals) = reference;
 
@@ -398,7 +368,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
         reference: (&mut [Item], &mut [Item]),
     ) -> anyhow::Result<()>
     where
-        Item: num_traits::NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps,
     {
         let (min_vals, max_vals) = reference;
 
@@ -642,8 +612,8 @@ mod tests {
             .unwrap();
 
         // Verify each column sums to target
-        let (cols, rows, vals) = csc.csc_data();
-        let mut col_sums_after = vec![0.0; 3];
+        let (cols, _rows, vals) = csc.csc_data();
+        let mut col_sums_after = [0.0; 3];
         for i in 0..cols.len() - 1 {
             for j in cols[i]..cols[i + 1] {
                 col_sums_after[i] += vals[j];
@@ -696,27 +666,5 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(all(test, feature = "simba"))]
-mod tests_simd {
-    use super::*;
-
-    #[test]
-    fn test_csc_nonzero_simd() {
-        // Create test matrix
-        let indices = vec![0, 1, 0, 1, 0, 1];
-        let indptr = vec![0, 2, 4, 6];
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let matrix = CscMatrix::try_from_csc_data(3, 3, indptr, indices, data).unwrap();
-
-        // Test column counts
-        let col_result = matrix.simba_nonzero_col::<u32>().unwrap();
-        assert_eq!(col_result, vec![2, 2, 2]);
-
-        // Test row counts
-        let row_result = matrix.simba_nonzero_row::<u32>().unwrap();
-        assert_eq!(row_result, vec![3, 3, 0]);
     }
 }
