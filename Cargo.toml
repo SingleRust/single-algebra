@@ -1,11 +1,19 @@
 [package]
 name = "single_algebra"
-version = "0.1.2-alpha.4"
+version = "0.1.2-alpha.5"
 edition = "2021"
 license-file = "LICENSE.md"
 description = "A linear algebra convenience library for the single-rust library. Can be used externally as well."
 categories = ["science"]
 repository = "https://github.com/SingleRust/single-algebra"
+
+[[bench]]
+name = "csc_matrix_benchmark"
+harness = false
+
+[[bench]]
+name = "csr_matrix_benchmark"
+harness = false
 
 
 [features]
@@ -34,5 +42,8 @@ simba = {version = "0.9.0", optional = true}
 smartcore = {version = "0.4", features=["ndarray-bindings"], optional = true}
 single-svdlib = "0.1.0"
 
+
 [dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
+rand = "0.8.5"
 approx = "0.5.1"
