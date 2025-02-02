@@ -83,27 +83,41 @@ where
     where
         T: Float + NumCast + AddAssign + std::iter::Sum,
     {
+        // Pre-allocate result with zeros
         let mut result = vec![T::zero(); self.ncols()];
-
-        // Direct access to CSC matrix data
-        let col_offsets = self.col_offsets();
         let values = self.values();
+        let col_offsets = self.col_offsets();
 
-        // Process each column using direct slice operations
-        for col in 0..self.ncols() {
-            let start = col_offsets[col];
-            let end = col_offsets[col + 1];
+        // Process columns in chunks for better cache utilization
+        const CHUNK_SIZE: usize = 1024;
+        for chunk_start in (0..self.ncols()).step_by(CHUNK_SIZE) {
+            let chunk_end = (chunk_start + CHUNK_SIZE).min(self.ncols());
 
-            // Sum values in this column's range
-            let sum = values[start..end]
-                .iter()
-                .fold(T::zero(), |acc, &v| {
-                    acc + T::from(v).unwrap()
-                });
+            // Pre-fetch next chunk's offsets
+            for col in chunk_start..chunk_end {
+                let start = col_offsets[col];
+                let end = col_offsets[col + 1];
 
-            result[col] = sum;
+                // Direct accumulation without iterator adaptors
+                let mut sum = T::zero();
+                let col_values = &values[start..end];
+
+                // Manual SIMD-like accumulation
+                for values in col_values.chunks_exact(4) {
+                    sum += T::from(values[0]).unwrap();
+                    sum += T::from(values[1]).unwrap();
+                    sum += T::from(values[2]).unwrap();
+                    sum += T::from(values[3]).unwrap();
+                }
+
+                // Handle remaining values
+                for &val in col_values.chunks_exact(4).remainder() {
+                    sum += T::from(val).unwrap();
+                }
+
+                result[col] = sum;
+            }
         }
-
         Ok(result)
     }
 
@@ -113,25 +127,23 @@ where
         Self::Item: NumCast,
     {
         let mut result = vec![T::zero(); self.nrows()];
-
-        // Get the matrix structure
-        let col_offsets = self.col_offsets();
         let row_indices = self.row_indices();
         let values = self.values();
 
-        // Process each column
-        for col in 0..self.ncols() {
-            let start = col_offsets[col];
-            let end = col_offsets[col + 1];
+        // Process in larger chunks for better vectorization
+        const CHUNK_SIZE: usize = 1024;
+        for chunk in (0..values.len()).step_by(CHUNK_SIZE) {
+            let end = (chunk + CHUNK_SIZE).min(values.len());
 
-            // For each value in this column, add it to the appropriate row sum
-            for idx in start..end {
-                let row = row_indices[idx];
-                let value = T::from(values[idx]).unwrap();
-                result[row] += value;
+            // Process chunk of indices and values together
+            for (&row_idx, &value) in row_indices[chunk..end]
+                .iter()
+                .zip(&values[chunk..end])
+            {
+                // Accumulate directly without type conversion until necessary
+                result[row_idx] += T::from(value).unwrap();
             }
         }
-
         Ok(result)
     }
 
@@ -397,6 +409,58 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
     }
 }
 
+impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
+    fn normalize<U: NumericNormalize>(
+        &mut self,
+        sums: &[U],
+        target: U,
+        direction: &crate::Direction,
+    ) -> anyhow::Result<()> {
+        // Pre-compute scaling factors to avoid repeated divisions
+        let scaling_factors: Vec<U> = sums
+            .iter()
+            .map(|&sum| if sum > U::zero() { target / sum } else { U::zero() })
+            .collect();
+
+        match direction {
+            crate::Direction::COLUMN => {
+                // Copy column offsets to avoid borrowing conflicts
+                let col_offsets = self.col_offsets().to_vec();
+                let ncols = self.ncols();
+                let values = self.values_mut();
+
+
+                // Process each column sequentially
+                for col in 0..ncols {
+                    let scale = scaling_factors[col];
+                    if scale > U::zero() {
+                        // Process all values in this column
+                        let start = col_offsets[col];
+                        let end = col_offsets[col + 1];
+                        for val in &mut values[start..end] {
+                            *val = T::from(U::from(*val).unwrap() * scale).unwrap();
+                        }
+                    }
+                }
+            }
+            crate::Direction::ROW => {
+                // Get row indices before mutating values
+                let row_indices = self.row_indices().to_vec();
+                let values = self.values_mut();
+
+                // Process in one pass through the data
+                for (val, &row) in values.iter_mut().zip(row_indices.iter()) {
+                    let scale = scaling_factors[row];
+                    if scale > U::zero() {
+                        *val = T::from(U::from(*val).unwrap() * scale).unwrap();
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Direction;
@@ -637,34 +701,4 @@ mod tests {
     }
 }
 
-impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
-    fn normalize<U: NumericNormalize>(
-        &mut self,
-        sums: &[U],
-        target: U,
-        direction: &crate::Direction,
-    ) -> anyhow::Result<()> {
-        match direction {
-            crate::Direction::COLUMN => {
-                let mut curr_col = 0;
-                for (_, col, val) in self.triplet_iter_mut() {
-                    if col != curr_col {
-                        curr_col = col;
-                    }
 
-                    if sums[col] > U::zero() {
-                        *val = T::from(U::from(*val).unwrap() * (target / sums[col])).unwrap();
-                    }
-                }
-            }
-            crate::Direction::ROW => {
-                for (row, _, val) in self.triplet_iter_mut() {
-                    if sums[row] > U::zero() {
-                        *val = T::from(U::from(*val).unwrap() * (target / sums[row])).unwrap();
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}

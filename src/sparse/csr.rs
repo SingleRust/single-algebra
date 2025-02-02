@@ -81,19 +81,20 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
         Self::Item: NumCast,
     {
         let mut result = vec![T::zero(); self.ncols()];
-        let row_offsets = self.row_offsets();
         let col_indices = self.col_indices();
         let values = self.values();
 
-        // Process each row
-        for row in 0..self.nrows() {
-            let start = row_offsets[row];
-            let end = row_offsets[row + 1];
+        // Process values directly in chunks to better utilize cache
+        const CHUNK_SIZE: usize = 256;
+        for chunk_start in (0..values.len()).step_by(CHUNK_SIZE) {
+            let chunk_end = (chunk_start + CHUNK_SIZE).min(values.len());
 
-            // Add each value to its corresponding column sum
-            for idx in start..end {
-                let col = col_indices[idx];
-                result[col] += T::from(values[idx]).unwrap();
+            // Direct accumulation without temporary storage
+            for (&col_idx, &value) in col_indices[chunk_start..chunk_end]
+                .iter()
+                .zip(&values[chunk_start..chunk_end])
+            {
+                result[col_idx] += T::from(value).unwrap();
             }
         }
 
@@ -106,20 +107,23 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
         Self::Item: NumCast,
     {
         let mut result = vec![T::zero(); self.nrows()];
-        let row_offsets = self.row_offsets();
         let values = self.values();
+        let row_offsets = self.row_offsets();
 
-        // Process each row using direct slice operations
+        // Since each row is likely to have moderate length,
+        // we can process them directly without chunking
         for row in 0..self.nrows() {
             let start = row_offsets[row];
             let end = row_offsets[row + 1];
 
-            // Sum values in this row's range
-            let sum = values[start..end]
-                .iter()
-                .fold(T::zero(), |acc, &v| acc + T::from(v).unwrap());
+            // Direct accumulation in original type
+            let mut sum = M::zero();
+            for &val in &values[start..end] {
+                sum = sum + val;
+            }
 
-            result[row] = sum;
+            // Single conversion per row
+            result[row] = T::from(sum).unwrap();
         }
 
         Ok(result)
@@ -418,22 +422,48 @@ impl<T: NumericNormalize> Normalize<T> for CsrMatrix<T> {
         target: U,
         direction: &crate::Direction,
     ) -> anyhow::Result<()> {
+        // Pre-compute scaling factors to avoid repeated divisions
+        let scaling_factors: Vec<U> = sums
+            .iter()
+            .map(|&sum| {
+                if sum > U::zero() {
+                    target / sum
+                } else {
+                    U::zero()
+                }
+            })
+            .collect();
+
         match direction {
             crate::Direction::COLUMN => {
-                for (_, col, val) in self.triplet_iter_mut() {
-                    if sums[col] > U::zero() {
-                        *val = T::from(U::from(*val).unwrap() * (target / sums[col])).unwrap();
+                // Get an iterator over column indices before mutating values
+                let col_indices = self.col_indices().to_vec();
+                let values = self.values_mut();
+
+                // Process in one pass through the data
+                for (val, &col) in values.iter_mut().zip(col_indices.iter()) {
+                    let scale = scaling_factors[col];
+                    if scale > U::zero() {
+                        *val = T::from(U::from(*val).unwrap() * scale).unwrap();
                     }
                 }
             }
             crate::Direction::ROW => {
-                let mut curr_row = 0;
-                for (row, _, val) in self.triplet_iter_mut() {
-                    if row != curr_row {
-                        curr_row = row;
-                    }
-                    if sums[row] > U::zero() {
-                        *val = T::from(U::from(*val).unwrap() * (target / sums[row])).unwrap();
+                // Copy row offsets to avoid borrowing conflicts
+                let row_offsets = self.row_offsets().to_vec();
+                let nrows = self.nrows();
+                let values = self.values_mut();
+
+                // Process each row sequentially
+                for row in 0..nrows {
+                    let scale = scaling_factors[row];
+                    if scale > U::zero() {
+                        // Process all values in this row
+                        let start = row_offsets[row];
+                        let end = row_offsets[row + 1];
+                        for val in &mut values[start..end] {
+                            *val = T::from(U::from(*val).unwrap() * scale).unwrap();
+                        }
                     }
                 }
             }
