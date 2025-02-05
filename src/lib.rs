@@ -9,3 +9,4 @@ pub use utils::FloatOps;
 pub use utils::Normalize;
 pub use utils::NumericNormalize;
 pub use utils::NumericOps;
+pub use utils::Log1P;
