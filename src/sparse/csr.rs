@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
 use num_traits::{Float, NumCast, One, PrimInt, Unsigned, Zero};
-
+use crate::utils::Log1P;
 use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
 
 impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
@@ -118,8 +118,9 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
             // Direct accumulation in original type
             let mut sum = M::zero();
+            
             for &val in &values[start..end] {
-                sum = sum + val;
+                sum += val;
             }
 
             // Single conversion per row
@@ -467,6 +468,17 @@ impl<T: NumericNormalize> Normalize<T> for CsrMatrix<T> {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+impl<T: NumericNormalize> Log1P<T> for CsrMatrix<T> {
+    fn log1p_normalize(&mut self) -> anyhow::Result<()> {
+        let values = self.values_mut();
+        for val in values.iter_mut() {
+            *val = T::one() + *val;
+            *val = val.ln();
         }
         Ok(())
     }

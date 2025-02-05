@@ -47,3 +47,9 @@ pub trait Normalize<T: NumericNormalize> {
         direction: &Direction,
     ) -> anyhow::Result<()>;
 }
+
+pub trait Log1P<T: NumericNormalize> {
+    fn log1p_normalize(
+        &mut self
+    ) -> anyhow::Result<()>;
+}
