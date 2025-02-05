@@ -9,6 +9,7 @@ use crate::{
 };
 
 use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
+use crate::utils::Log1P;
 use anyhow::anyhow;
 
 impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
@@ -136,10 +137,7 @@ where
             let end = (chunk + CHUNK_SIZE).min(values.len());
 
             // Process chunk of indices and values together
-            for (&row_idx, &value) in row_indices[chunk..end]
-                .iter()
-                .zip(&values[chunk..end])
-            {
+            for (&row_idx, &value) in row_indices[chunk..end].iter().zip(&values[chunk..end]) {
                 // Accumulate directly without type conversion until necessary
                 result[row_idx] += T::from(value).unwrap();
             }
@@ -335,10 +333,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
         Ok((min, max))
     }
 
-    fn min_max_col_chunk<Item>(
-        &self,
-        reference: (&mut [Item], &mut [Item]),
-    ) -> anyhow::Result<()>
+    fn min_max_col_chunk<Item>(&self, reference: (&mut [Item], &mut [Item])) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps,
     {
@@ -375,10 +370,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
         Ok(())
     }
 
-    fn min_max_row_chunk<Item>(
-        &self,
-        reference: (&mut [Item], &mut [Item]),
-    ) -> anyhow::Result<()>
+    fn min_max_row_chunk<Item>(&self, reference: (&mut [Item], &mut [Item])) -> anyhow::Result<()>
     where
         Item: NumCast + Copy + PartialOrd + NumericOps,
     {
@@ -419,7 +411,13 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
         // Pre-compute scaling factors to avoid repeated divisions
         let scaling_factors: Vec<U> = sums
             .iter()
-            .map(|&sum| if sum > U::zero() { target / sum } else { U::zero() })
+            .map(|&sum| {
+                if sum > U::zero() {
+                    target / sum
+                } else {
+                    U::zero()
+                }
+            })
             .collect();
 
         match direction {
@@ -428,7 +426,6 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
                 let col_offsets = self.col_offsets().to_vec();
                 let ncols = self.ncols();
                 let values = self.values_mut();
-
 
                 // Process each column sequentially
                 for col in 0..ncols {
@@ -456,6 +453,17 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+impl<T: NumericNormalize> Log1P<T> for CscMatrix<T> {
+    fn log1p_normalize(&mut self) -> anyhow::Result<()> {
+        let values = self.values_mut();
+        for val in values.iter_mut() {
+            *val = T::one() + *val;
+            *val = val.ln();
         }
         Ok(())
     }
@@ -699,6 +707,22 @@ mod tests {
             assert!((sum - target).abs() < 1e-10);
         }
     }
+    
+    #[test]
+    fn test_zero_elements() {
+        let coo = CooMatrix::try_from_triplets(
+            2,
+            2,
+            vec![0, 1],
+            vec![0, 1],
+            vec![0.0, 0.0f64],
+        ).unwrap();
+        let mut csc: CscMatrix<f64> = (&coo).into();
+
+        csc.log1p_normalize().unwrap();
+
+        for (_, _, val) in csc.triplet_iter() {
+            assert!((val - 0.0).abs() < 1e-10);
+        }
+    }
 }
-
-
