@@ -1,3 +1,5 @@
+// https://en.wikipedia.org/wiki/Sparse_PCA
+
 use anyhow::anyhow;
 use nalgebra_sparse::CsrMatrix;
 use ndarray::{s, Array1, Array2};
@@ -63,7 +65,7 @@ impl SparsePCA {
             1.0e-6,
             self.random_seed,
         )
-        .map_err(|e| anyhow::anyhow!("SVD computation failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("SVD computation failed: {}", e))?;
 
         // Changed this line to use n_features instead of n_samples
         let components = svd.vt.slice(s![..self.n_components, ..]).to_owned();
@@ -287,7 +289,7 @@ mod tests {
             4, // 4 columns
             rows, cols, vals,
         )
-        .unwrap();
+            .unwrap();
 
         CsrMatrix::from(&coo)
     }

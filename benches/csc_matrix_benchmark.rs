@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, BenchmarkGroup, criterion_group, criterion_main};
 use nalgebra_sparse::{CooMatrix, CscMatrix};
-use rand::{distributions::Uniform, SeedableRng, rngs::StdRng};
+use rand::{SeedableRng, rngs::StdRng};
 use std::time::Duration;
 use criterion::measurement::Measurement;
-use rand::distributions::Distribution;
+use rand::distr::{Distribution, Uniform};
 use rayon::ThreadPool;
 use single_algebra::sparse::{MatrixNonZero, MatrixSum};
 
@@ -43,9 +43,9 @@ fn create_csc_matrix(
     let mut rng = StdRng::seed_from_u64(seed);
     let mut coo = CooMatrix::new(rows, cols);
     let total_elements = (rows * cols) as f64 * density;
-    let value_dist = Uniform::from(0.0..1.0);
-    let row_dist = Uniform::from(0..rows);
-    let col_dist = Uniform::from(0..cols);
+    let value_dist = Uniform::try_from(0.0..1.0).unwrap();
+    let row_dist = Uniform::try_from(0..rows).unwrap();
+    let col_dist = Uniform::try_from(0..cols).unwrap();
 
     for _ in 0..total_elements as usize {
         let row = row_dist.sample(&mut rng);

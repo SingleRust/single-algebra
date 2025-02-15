@@ -1,6 +1,7 @@
-use std::ops::Add;
+use std::iter::repeat;
+use std::ops::{Add, AddAssign};
 
-use num_traits::{Bounded, NumCast, One, Zero};
+use num_traits::{AsPrimitive, Bounded, NumCast, One, Zero};
 
 pub enum Direction {
     COLUMN,
@@ -49,7 +50,17 @@ pub trait Normalize<T: NumericNormalize> {
 }
 
 pub trait Log1P<T: NumericNormalize> {
-    fn log1p_normalize(
-        &mut self
-    ) -> anyhow::Result<()>;
+    fn log1p_normalize(&mut self) -> anyhow::Result<()>;
+}
+
+pub trait ZeroVec {
+    fn zero_len(&mut self, len: usize);
+}
+
+impl<T: Default + Clone> ZeroVec for Vec<T> {
+    fn zero_len(&mut self, len: usize) {
+        self.clear();
+        self.reserve(len);
+        self.extend(repeat(T::default()).take(len));
+    }
 }
