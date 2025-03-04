@@ -2,6 +2,10 @@ pub mod dense;
 pub mod sparse;
 pub mod svd;
 
+// statistics module
+#[cfg(feature="statistics")]
+pub mod statistics;
+
 pub mod dimred;
 
 #[cfg(feature = "clustering")]
