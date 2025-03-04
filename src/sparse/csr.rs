@@ -36,7 +36,7 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
                     .expect("Subtraction overflow");
                 T::from(diff)
                     .ok_or_else(|| anyhow!("Failed to convert to target type"))
-                    .expect("Failed to convert to targat type")
+                    .expect("Failed to convert to target type")
             })
             .collect();
         Ok(data)
@@ -106,24 +106,49 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
         T: Float + NumCast + AddAssign + std::iter::Sum,
         Self::Item: NumCast,
     {
-        let mut result = vec![T::zero(); self.nrows()];
+        let nrows = self.nrows();
+        let mut result = vec![T::zero(); nrows];
         let values = self.values();
         let row_offsets = self.row_offsets();
 
-        // Since each row is likely to have moderate length,
-        // we can process them directly without chunking
-        for row in 0..self.nrows() {
+        // Process in chunks of 4 rows when possible
+        let chunk_size = 4;
+        let chunks = nrows / chunk_size;
+        let remainder = nrows % chunk_size;
+
+        // Process chunks
+        for chunk in 0..chunks {
+            let base = chunk * chunk_size;
+            let mut sums = [M::zero(); 4];
+
+            // Process 4 rows at once to improve instruction-level parallelism
+            (0..chunk_size).enumerate().for_each(|(i, offset)| {
+                let row = base + offset;
+                let start = row_offsets[row];
+                let end = row_offsets[row + 1];
+
+                // Direct sum in original type
+                for &val in &values[start..end] {
+                    sums[i] += val;
+                }
+            });
+
+            // Convert results for the chunk
+            sums.iter().enumerate().for_each(|(i, &sum)| {
+                result[base + i] = T::from(sum).unwrap();
+            });
+        }
+
+        // Handle remaining rows
+        let base = chunks * chunk_size;
+        for row in base..nrows {
             let start = row_offsets[row];
             let end = row_offsets[row + 1];
-
-            // Direct accumulation in original type
             let mut sum = M::zero();
-            
+
             for &val in &values[start..end] {
                 sum += val;
             }
-
-            // Single conversion per row
             result[row] = T::from(sum).unwrap();
         }
 

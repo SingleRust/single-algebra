@@ -123,6 +123,6 @@ pub fn bench_csr_sums(c: &mut Criterion) {
     }
     group.finish();
 }
-
-criterion_group!(csr_benches, bench_csr_nonzero_counts, bench_csr_sums);
+// bench_csr_nonzero_counts
+criterion_group!(csr_benches, bench_csr_sums);
 criterion_main!(csr_benches);
