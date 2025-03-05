@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(grouping.get_groups_range(1..4), &[1, 2, 3]);
     }
 
-    // Include previous tests...
+    // Include previous inference...
     #[test]
     fn test_create_isolated() {
         let grouping = VectorGrouping::create_isolated(3);
