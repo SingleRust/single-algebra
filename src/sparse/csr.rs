@@ -1,5 +1,8 @@
+use std::iter::Sum;
 use std::ops::{Add, AddAssign};
 
+use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
+use crate::utils::Log1P;
 use crate::{
     utils::{Normalize, NumericNormalize},
     NumericOps,
@@ -7,8 +10,6 @@ use crate::{
 use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
 use num_traits::{Float, NumCast, One, PrimInt, Unsigned, Zero};
-use crate::utils::Log1P;
-use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
 
 impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -69,6 +70,77 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
             }
         }
         Ok(())
+    }
+
+    fn nonzero_col_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: PrimInt + Unsigned + Zero + AddAssign,
+    {
+        // Validate mask length
+        if mask.len() < self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of rows ({})",
+                mask.len(),
+                self.nrows()
+            ));
+        }
+
+        let mut result = vec![T::zero(); self.ncols()];
+
+        // Process each row
+        for row in 0..self.nrows() {
+            // Skip this row if masked out
+            if !mask[row] {
+                continue;
+            }
+
+            let row_start = self.row_offsets()[row];
+            let row_end = self.row_offsets()[row + 1];
+
+            // Process all non-zero elements in this row
+            for idx in row_start..row_end {
+                let col = self.col_indices()[idx];
+                result[col] += T::one();
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn nonzero_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: PrimInt + Unsigned + Zero + AddAssign,
+    {
+        // Validate mask length
+        if mask.len() < self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of columns ({})",
+                mask.len(),
+                self.ncols()
+            ));
+        }
+
+        let mut result = vec![T::zero(); self.nrows()];
+
+        // Process each row
+        for row in 0..self.nrows() {
+            let row_start = self.row_offsets()[row];
+            let row_end = self.row_offsets()[row + 1];
+
+            // Count non-zero elements in this row that are in masked-in columns
+            for idx in row_start..row_end {
+                let col = self.col_indices()[idx];
+
+                // Skip this column if masked out
+                if !mask[col] {
+                    continue;
+                }
+
+                result[row] += T::one();
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -177,6 +249,79 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
             reference[row] = row_vec.values().iter().map(|&v| T::from(v).unwrap()).sum();
         }
         Ok(())
+    }
+
+    fn sum_col_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of rows ({})",
+                mask.len(),
+                self.nrows()
+            ));
+        }
+
+        let mut result = vec![T::zero(); self.ncols()];
+
+        // Process each row
+        for row in 0..self.nrows() {
+            // Skip this row if masked out
+            if !mask[row] {
+                continue;
+            }
+
+            let row_start = self.row_offsets()[row];
+            let row_end = self.row_offsets()[row + 1];
+
+            // Process all non-zero elements in this row
+            for idx in row_start..row_end {
+                let col = self.col_indices()[idx];
+                let value = T::from(self.values()[idx]).unwrap();
+                result[col] += value;
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn sum_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of columns ({})",
+                mask.len(),
+                self.ncols()
+            ));
+        }
+
+        let mut result = vec![T::zero(); self.nrows()];
+
+        // Process each row
+        for row in 0..self.nrows() {
+            let row_start = self.row_offsets()[row];
+            let row_end = self.row_offsets()[row + 1];
+
+            // Process all non-zero elements in this row
+            for idx in row_start..row_end {
+                let col = self.col_indices()[idx];
+
+                // Skip this column if masked out
+                if !mask[col] {
+                    continue;
+                }
+
+                let value = T::from(self.values()[idx]).unwrap();
+                result[row] += value;
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -339,6 +484,104 @@ where
         }
 
         Ok(())
+    }
+
+    fn var_col_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of rows ({})",
+                mask.len(),
+                self.nrows()
+            ));
+        }
+
+        // Calculate masked sums and counts
+        let sum: Vec<T> = self.sum_col_masked(mask)?;
+        let count: Vec<I> = self.nonzero_col_masked(mask)?;
+
+        let mut result = vec![T::zero(); self.ncols()];
+        let mut squared_sums = vec![T::zero(); self.ncols()];
+
+        // Calculate sum of squares for each column (using only masked-in rows)
+        for row in 0..self.nrows() {
+            // Skip this row if masked out
+            if !mask[row] {
+                continue;
+            }
+
+            let row_start = self.row_offsets()[row];
+            let row_end = self.row_offsets()[row + 1];
+
+            for idx in row_start..row_end {
+                let col = self.col_indices()[idx];
+                let val = T::from(self.values()[idx]).unwrap();
+                squared_sums[col] += val * val;
+            }
+        }
+
+        // Calculate variance for each column
+        for col in 0..self.ncols() {
+            if count[col] > I::zero() {
+                let mean = sum[col] / count[col].into();
+                result[col] = squared_sums[col] / count[col].into() - mean * mean;
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn var_row_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of columns ({})",
+                mask.len(),
+                self.ncols()
+            ));
+        }
+
+        // Calculate masked sums and counts
+        let sum: Vec<T> = self.sum_row_masked(mask)?;
+        let count: Vec<I> = self.nonzero_row_masked(mask)?;
+
+        let mut result = vec![T::zero(); self.nrows()];
+
+        // Process each row to calculate variance
+        for row in 0..self.nrows() {
+            if count[row] > I::zero() {
+                let mean = sum[row] / count[row].into();
+                let row_start = self.row_offsets()[row];
+                let row_end = self.row_offsets()[row + 1];
+
+                // Calculate sum of squared differences for this row (only for masked-in columns)
+                let mut sum_sq_diff = T::zero();
+                for idx in row_start..row_end {
+                    let col = self.col_indices()[idx];
+
+                    // Skip masked out columns
+                    if !mask[col] {
+                        continue;
+                    }
+
+                    let val = T::from(self.values()[idx]).unwrap();
+                    let diff = val - mean;
+                    sum_sq_diff += diff * diff;
+                }
+
+                result[row] = sum_sq_diff / count[row].into();
+            }
+        }
+
+        Ok(result)
     }
 }
 

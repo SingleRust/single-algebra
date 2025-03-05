@@ -26,6 +26,7 @@ clustering = ["network", "local_moving", "dep:kiddo"]
 network = []
 local_moving = ["network", "dep:ahash"]
 statistics = ["dep:statrs"]
+correction = []
 
 [dependencies]
 anyhow = "1.0.95"

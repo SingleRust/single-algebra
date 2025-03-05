@@ -23,6 +23,16 @@ pub trait MatrixNonZero {
     fn nonzero_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         T: PrimInt + Unsigned + Zero + AddAssign;
+
+    /// Calculate masked non-zero counts for columns
+    fn nonzero_col_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: PrimInt + Unsigned + Zero + AddAssign;
+
+    /// Calculate masked non-zero counts for rows
+    fn nonzero_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: PrimInt + Unsigned + Zero + AddAssign;
 }
 
 pub trait MatrixSum {
@@ -43,6 +53,15 @@ pub trait MatrixSum {
     fn sum_row_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         T: Float + num_traits::NumCast + AddAssign + std::iter::Sum;
+
+    fn sum_col_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
+
+    /// Calculate masked sum for rows
+    fn sum_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
 }
 
 pub trait MatrixVariance {
@@ -67,6 +86,18 @@ pub trait MatrixVariance {
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
         T: Float + num_traits::NumCast + AddAssign + std::iter::Sum;
+
+    /// Calculate masked variance for columns
+    fn var_col_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + std::iter::Sum;
+
+    /// Calculate masked variance for rows
+    fn var_row_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + std::iter::Sum;
 }
 
 pub trait MatrixMinMax {
