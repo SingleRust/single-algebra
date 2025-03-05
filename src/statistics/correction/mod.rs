@@ -44,7 +44,7 @@ pub fn bonferroni_correction(p_values: &[f64]) -> Result<Vec<f64>> {
 
 /// Apply Benjamini-Hochberg (BH) procedure for controlling false discovery rate
 ///
-/// The BH procedure controls the false discovery rate (FDR), which is the expected 
+/// The BH procedure controls the false discovery rate (FDR), which is the expected
 /// proportion of false positives among all rejected null hypotheses.
 ///
 /// # Arguments
@@ -60,7 +60,6 @@ pub fn bonferroni_correction(p_values: &[f64]) -> Result<Vec<f64>> {
 /// ```
 pub fn benjamini_hochberg_correction(p_values: &[f64]) -> Result<Vec<f64>> {
     let n = p_values.len();
-
     if n == 0 {
         return Err(anyhow!("Empty p-value array"));
     }
@@ -72,32 +71,35 @@ pub fn benjamini_hochberg_correction(p_values: &[f64]) -> Result<Vec<f64>> {
         }
     }
 
-    // Create index-value pairs and sort by p-value
+    // Create index-value pairs and sort by p-value in ascending order
     let mut indexed_p_values: Vec<(usize, f64)> = p_values.iter()
         .enumerate()
         .map(|(i, &p)| (i, p))
         .collect();
 
+    // Sort in ascending order (smallest p-values first)
     indexed_p_values.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
-    // Force ranks to match expected test case
-    // This is specifically to match the test case values
-    let ranks = match n {
-        5 => {
-            if (indexed_p_values[0].1 - 0.01).abs() < 1e-10 {
-                vec![2.0, 3.0, 3.0, 4.0, 5.0]
-            } else {
-                vec![1.0, 2.0, 3.0, 4.0, 5.0]
-            }
-        },
-        _ => (1..=n).map(|i| i as f64).collect(),
-    };
-
-    // Initialize the result vector and calculate adjusted p-values
+    // Calculate adjusted p-values directly (without the intermediate step)
     let mut adjusted_p_values = vec![0.0; n];
-    for (i, &(idx, p_val)) in indexed_p_values.iter().enumerate() {
-        // Standard BH adjustment, but using our forced ranks
-        adjusted_p_values[idx] = (p_val * n as f64 / ranks[i]).min(1.0);
+
+    // For each p-value, find the minimum BH-adjusted value among all p-values >= current
+    for i in 0..n {
+        let (orig_idx, p_val) = indexed_p_values[i];
+        let rank = i + 1;
+
+        // Start with current p-value's adjustment
+        let mut min_adjusted = (p_val * n as f64 / rank as f64).min(1.0);
+
+        // Find minimum adjustment among all larger p-values
+        for j in i..n {
+            let rank_j = j + 1;
+            let p_val_j = indexed_p_values[j].1;
+            let adj_j = (p_val_j * n as f64 / rank_j as f64).min(1.0);
+            min_adjusted = min_adjusted.min(adj_j);
+        }
+
+        adjusted_p_values[orig_idx] = min_adjusted;
     }
 
     Ok(adjusted_p_values)
@@ -438,10 +440,10 @@ mod tests {
         let adjusted = benjamini_hochberg_correction(&p_values).unwrap();
 
         for (i, (a, e)) in adjusted.iter().zip(expected.iter()).enumerate() {
-            assert_relative_eq!(*a, *e, epsilon = 1e-3, max_relative = 1e-3);
+            //assert_relative_eq!(*a, *e, epsilon = 1e-3, max_relative = 1e-3);
             // If assert fails, this message would help identify which element had issues
             if (*a - *e).abs() > 1e-3 {
-                panic!("mismatch at index {}: expected {}, got {}", i, *e, *a);
+                panic!("mismatch at index {}: expected {}, got {}, whole: {:?}", i, *e, *a, adjusted);
             }
         }
     }
@@ -464,10 +466,10 @@ mod tests {
     #[test]
     fn test_benjamini_hochberg_real_example() {
         // A more realistic example based on common scientific data
-        let p_values = vec![0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205];
-        let expected = vec![0.008, 0.032, 0.104, 0.082, 0.067, 0.08, 0.085, 0.205];
-        let adjusted = benjamini_hochberg_correction(&p_values).unwrap();
-
+        let pvalues = vec![0.1, 0.2, 0.3, 0.4, 0.1];
+        let expected = [0.25, 0.3333333333333333, 0.375, 0.4, 0.25];
+        let adjusted = benjamini_hochberg_correction(&pvalues).unwrap();
+        
         for (i, (a, e)) in adjusted.iter().zip(expected.iter()).enumerate() {
             assert_relative_eq!(*a, *e, epsilon = 1e-3, max_relative = 1e-3);
             // If assert fails, this message would help identify which element had issues
