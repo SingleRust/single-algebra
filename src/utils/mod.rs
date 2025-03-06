@@ -1,3 +1,4 @@
+use std::hash::Hash;
 use std::iter::repeat;
 use std::ops::{Add, AddAssign};
 
@@ -64,3 +65,14 @@ impl<T: Default + Clone> ZeroVec for Vec<T> {
         self.extend(repeat(T::default()).take(len));
     }
 }
+
+/// Trait for types that can be used to identify batches
+pub trait BatchIdentifier: Clone + Eq + Hash {}
+
+// Implement BatchIdentifier for common types
+impl BatchIdentifier for String {}
+impl BatchIdentifier for &str {}
+impl BatchIdentifier for i32 {}
+impl BatchIdentifier for u32 {}
+impl BatchIdentifier for usize {}
+

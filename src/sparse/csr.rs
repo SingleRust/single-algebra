@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign};
 
-use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
-use crate::utils::Log1P;
+use super::{BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
+use crate::utils::{BatchIdentifier, Log1P};
 use crate::{
     utils::{Normalize, NumericNormalize},
     NumericOps,
@@ -749,6 +751,272 @@ impl<T: NumericNormalize> Log1P<T> for CsrMatrix<T> {
             *val = val.ln();
         }
         Ok(())
+    }
+}
+
+impl<M> BatchMatrixVariance for CsrMatrix<M>
+where
+    M: NumericOps + NumCast,
+    CsrMatrix<M>: MatrixSum + MatrixNonZero,
+{
+    type Item = M;
+
+    fn var_batch_row<I, T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Batch vector length ({}) doesn't match matrix row count ({})",
+                batches.len(),
+                self.nrows()
+            ));
+        }
+
+        // Group row indices by batch
+        let mut batch_indices: HashMap<B, Vec<usize>> = HashMap::new();
+        for (idx, batch) in batches.iter().enumerate() {
+            batch_indices.entry(batch.clone()).or_default().push(idx);
+        }
+
+        // Calculate variance for each batch
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+
+        for (batch, indices) in batch_indices {
+            // Calculate variance for each column across the rows in this batch
+            let mut batch_vars = vec![T::zero(); self.ncols()];
+            let mut batch_means = vec![T::zero(); self.ncols()];
+            let mut batch_counts = vec![0usize; self.ncols()];
+            let mut batch_sum_sq = vec![T::zero(); self.ncols()];
+
+            // First pass: calculate sum and count for each column
+            for &row_idx in &indices {
+                let row_start = self.row_offsets()[row_idx];
+                let row_end = self.row_offsets()[row_idx + 1];
+
+                for j in row_start..row_end {
+                    let col = self.col_indices()[j];
+                    let val = T::from(self.values()[j]).unwrap();
+                    batch_means[col] = batch_means[col] + val;
+                    batch_counts[col] += 1;
+                }
+            }
+
+            // Calculate means
+            for (mean, &count) in batch_means.iter_mut().zip(batch_counts.iter()) {
+                if count > 0 {
+                    *mean = *mean / T::from(count).unwrap();
+                }
+            }
+
+            // Second pass: calculate sum of squared differences from mean
+            for &row_idx in &indices {
+                let row_start = self.row_offsets()[row_idx];
+                let row_end = self.row_offsets()[row_idx + 1];
+
+                for j in row_start..row_end {
+                    let col = self.col_indices()[j];
+                    let val = T::from(self.values()[j]).unwrap();
+                    let diff = val - batch_means[col];
+                    batch_sum_sq[col] = batch_sum_sq[col] + diff * diff;
+                }
+            }
+
+            // Calculate variance
+            for ((var, &count), &sum_sq) in batch_vars
+                .iter_mut()
+                .zip(batch_counts.iter())
+                .zip(batch_sum_sq.iter())
+            {
+                if count > 1 {
+                    *var = sum_sq / T::from(count - 1).unwrap();
+                }
+            }
+
+            result.insert(batch, batch_vars);
+        }
+
+        Ok(result)
+    }
+
+    fn var_batch_col<I, T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Batch vector length ({}) doesn't match matrix column count ({})",
+                batches.len(),
+                self.ncols()
+            ));
+        }
+
+        // Create map of column indices to batch identifiers
+        let col_to_batch: Vec<&B> = batches.iter().collect();
+
+        // Group columns by batch
+        let mut batch_columns: HashMap<B, Vec<usize>> = HashMap::new();
+        for (col_idx, &batch) in col_to_batch.iter().enumerate() {
+            batch_columns
+                .entry(batch.clone())
+                .or_default()
+                .push(col_idx);
+        }
+
+        // Calculate variance for each batch
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+
+        for (batch, col_indices) in batch_columns {
+            // Calculate variance for each row across the columns in this batch
+            let mut batch_vars = vec![T::zero(); self.nrows()];
+
+            // Collect values for each row in this batch
+            let mut row_values: Vec<Vec<T>> = vec![Vec::new(); self.nrows()];
+
+            // Gather all values for each row across the batch's columns
+            for row_idx in 0..self.nrows() {
+                let row_start = self.row_offsets()[row_idx];
+                let row_end = self.row_offsets()[row_idx + 1];
+
+                for j in row_start..row_end {
+                    let col = self.col_indices()[j];
+
+                    // Check if this column is in the current batch
+                    if col_indices.contains(&col) {
+                        let val = T::from(self.values()[j]).unwrap();
+                        row_values[row_idx].push(val);
+                    }
+                }
+            }
+
+            // Calculate variance for each row
+            for (row_idx, values) in row_values.iter().enumerate() {
+                if values.len() > 1 {
+                    // Calculate mean
+                    let mean = values.iter().copied().sum::<T>() / T::from(values.len()).unwrap();
+
+                    // Calculate sum of squared differences
+                    let sum_sq_diff = values
+                        .iter()
+                        .map(|&val| {
+                            let diff = val - mean;
+                            diff * diff
+                        })
+                        .sum::<T>();
+
+                    // Calculate variance
+                    batch_vars[row_idx] = sum_sq_diff / T::from(values.len() - 1).unwrap();
+                }
+                // If values.len() <= 1, variance remains 0
+            }
+
+            result.insert(batch, batch_vars);
+        }
+
+        Ok(result)
+    }
+}
+
+impl<M: NumericOps + NumCast> BatchMatrixMean for CsrMatrix<M> {
+    type Item = M;
+
+    fn mean_batch_row<T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Number of batch identifiers ({}) must match number of columns ({})",
+                batches.len(),
+                self.ncols()
+            ));
+        }
+
+        // Group columns by batch
+        let mut batch_indices: HashMap<B, Vec<usize>> = HashMap::new();
+        for (col_idx, batch) in batches.iter().enumerate() {
+            batch_indices
+                .entry(batch.clone())
+                .or_default()
+                .push(col_idx);
+        }
+
+        // Calculate mean for each batch and row
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+        for (batch, col_indices) in batch_indices {
+            let mut batch_means = vec![T::zero(); self.nrows()];
+
+            // First calculate sum for each row in this batch
+            for &col_idx in &col_indices {
+                for row in 0..self.nrows() {
+                    if let Some(entry) = self.get_entry(row, col_idx) {
+                        batch_means[row] += T::from(entry.into_value()).unwrap();
+                    }
+                }
+            }
+
+            // Divide by number of columns in this batch to get mean
+            let col_count = T::from(col_indices.len()).unwrap();
+            for mean in &mut batch_means {
+                *mean = *mean / col_count;
+            }
+
+            result.insert(batch, batch_means);
+        }
+
+        Ok(result)
+    }
+
+    fn mean_batch_col<T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Number of batch identifiers ({}) must match number of rows ({})",
+                batches.len(),
+                self.nrows()
+            ));
+        }
+
+        // Group rows by batch
+        let mut batch_indices: HashMap<B, Vec<usize>> = HashMap::new();
+        for (row_idx, batch) in batches.iter().enumerate() {
+            batch_indices
+                .entry(batch.clone())
+                .or_default()
+                .push(row_idx);
+        }
+
+        // Calculate mean for each batch and column
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+        for (batch, row_indices) in batch_indices {
+            let mut batch_means = vec![T::zero(); self.ncols()];
+
+            // First calculate sum for each column in this batch
+            for &row_idx in &row_indices {
+                for (col_idx, _, value) in self.triplet_iter().filter(|&(row, _, _)| row == row_idx)
+                {
+                    batch_means[col_idx] += T::from(*value).unwrap();
+                }
+            }
+
+            // Divide by number of rows in this batch to get mean
+            let row_count = T::from(row_indices.len()).unwrap();
+            for mean in &mut batch_means {
+                *mean = *mean / row_count;
+            }
+
+            result.insert(batch, batch_means);
+        }
+
+        Ok(result)
     }
 }
 

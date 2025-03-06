@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::ops::AddAssign;
 
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 
 use crate::NumericOps;
+use crate::utils::BatchIdentifier;
 
 pub mod csc;
 pub mod csr;
@@ -119,3 +122,39 @@ pub trait MatrixMinMax {
     where
         Item: NumCast + Copy + PartialOrd + NumericOps;
 }
+
+pub trait BatchMatrixVariance {
+    type Item: NumCast;
+
+    /// Calculate row-wise variance for each batch
+    fn var_batch_row<I, T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier;
+
+    /// Calculate column-wise variance for each batch
+    fn var_batch_col<I, T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier;
+}
+
+pub trait BatchMatrixMean {
+    type Item: NumCast;
+
+    /// Calculate row-wise mean for each batch
+    fn mean_batch_row<T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier;
+
+    /// Calculate column-wise mean for each batch
+    fn mean_batch_col<T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier;
+}
+
+

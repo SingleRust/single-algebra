@@ -1,32 +1,9 @@
+use crate::utils::BatchIdentifier;
 use crate::NumericOps;
 use anyhow::Result;
 use std::hash::Hash;
-
-/// Trait for types that can be used to identify batches
-pub trait BatchIdentifier: Clone + Eq + Hash {}
-
-// Implement BatchIdentifier for common types
-impl BatchIdentifier for String {}
-impl BatchIdentifier for &str {}
-impl BatchIdentifier for i32 {}
-impl BatchIdentifier for u32 {}
-impl BatchIdentifier for usize {}
-
-/// Matrix trait required for batch correction operations
-pub trait CorrectionMatrix {
-    type Item;
-
-    fn nrows(&self) -> usize;
-    fn ncols(&self) -> usize;
-
-    /// Extract a view of rows belonging to a specific batch
-    fn batch_view<B: BatchIdentifier>(&self, batch_indices: &[usize]) -> Result<Self>
-    where
-        Self: Sized;
-
-    /// Create a new matrix with the same structure but different values
-    fn with_same_structure(&self, values: Vec<Self::Item>) -> Result<Self> where Self: std::marker::Sized;
-}
+use std::ops::AddAssign;
+use num_traits::{Float, NumCast};
 
 /// Core trait for batch correction algorithms
 pub trait BatchCorrection<T, B>
@@ -52,4 +29,31 @@ where
         self.fit(data, batches)?;
         self.transform(data)
     }
+}
+
+pub trait CorrectionMatrix: Sized {
+    type Item: NumericOps + NumCast;
+
+    /// Center columns by subtracting column means
+    fn center_columns<T>(&mut self, means: &[T]) -> anyhow::Result<()>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
+
+    /// Center rows by subtracting row means
+    fn center_rows<T>(&mut self, means: &[T]) -> anyhow::Result<()>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
+
+    /// Scale columns by dividing by column scaling factors
+    fn scale_columns<T>(&mut self, factors: &[T]) -> anyhow::Result<()>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
+
+    /// Scale rows by dividing by row scaling factors
+    fn scale_rows<T>(&mut self, factors: &[T]) -> anyhow::Result<()>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
+
+    /// Create a new matrix with the same dimensions and structure
+    fn like(&self) -> Self;
 }
