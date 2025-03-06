@@ -8,6 +8,9 @@ pub mod statistics;
 
 pub mod dimred;
 
+//#[cfg(feature="correction")]
+//pub mod correction;
+
 #[cfg(feature = "clustering")]
 pub mod clustering;
 

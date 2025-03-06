@@ -1,5 +1,8 @@
 use nalgebra_sparse::CscMatrix;
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
+use std::iter::Sum;
 use std::ops::Add;
 use std::ops::AddAssign;
 
@@ -8,8 +11,8 @@ use crate::{
     NumericOps,
 };
 
-use super::{MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
-use crate::utils::Log1P;
+use super::{BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
+use crate::utils::{BatchIdentifier, Log1P};
 use anyhow::anyhow;
 
 impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
@@ -71,6 +74,77 @@ impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
             }
         }
         Ok(())
+    }
+
+    fn nonzero_col_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: PrimInt + Unsigned + Zero + AddAssign,
+    {
+        // Validate mask length
+        if mask.len() < self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of rows ({})",
+                mask.len(),
+                self.nrows()
+            ));
+        }
+
+        let mut result = vec![T::zero(); self.ncols()];
+
+        // Process each column
+        for col in 0..self.ncols() {
+            let col_start = self.col_offsets()[col];
+            let col_end = self.col_offsets()[col + 1];
+
+            // Count non-zero elements in this column that are in masked-in rows
+            for idx in col_start..col_end {
+                let row = self.row_indices()[idx];
+
+                // Skip this row if masked out
+                if !mask[row] {
+                    continue;
+                }
+
+                result[col] += T::one();
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn nonzero_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: PrimInt + Unsigned + Zero + AddAssign,
+    {
+        // Validate mask length
+        if mask.len() < self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of columns ({})",
+                mask.len(),
+                self.ncols()
+            ));
+        }
+
+        let mut result = vec![T::zero(); self.nrows()];
+
+        // Process each column
+        for col in 0..self.ncols() {
+            // Skip this column if masked out
+            if !mask[col] {
+                continue;
+            }
+
+            let col_start = self.col_offsets()[col];
+            let col_end = self.col_offsets()[col + 1];
+
+            // Count non-zero elements in this column
+            for idx in col_start..col_end {
+                let row = self.row_indices()[idx];
+                result[row] += T::one();
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -169,6 +243,81 @@ where
             }
         }
         Ok(())
+    }
+
+    fn sum_col_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of rows ({})",
+                mask.len(),
+                self.nrows()
+            ));
+        }
+
+        // Pre-allocate result with zeros
+        let mut result = vec![T::zero(); self.ncols()];
+
+        // Process each column
+        for col in 0..self.ncols() {
+            let col_start = self.col_offsets()[col];
+            let col_end = self.col_offsets()[col + 1];
+
+            // Process all non-zero elements in this column
+            for idx in col_start..col_end {
+                let row = self.row_indices()[idx];
+
+                // Skip this row if masked out
+                if !mask[row] {
+                    continue;
+                }
+
+                let value = T::from(self.values()[idx]).unwrap();
+                result[col] += value;
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn sum_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of columns ({})",
+                mask.len(),
+                self.ncols()
+            ));
+        }
+
+        // Pre-allocate result with zeros
+        let mut result = vec![T::zero(); self.nrows()];
+
+        // Process each column
+        for col in 0..self.ncols() {
+            // Skip this column if masked out
+            if !mask[col] {
+                continue;
+            }
+
+            let col_start = self.col_offsets()[col];
+            let col_end = self.col_offsets()[col + 1];
+
+            // Process all non-zero elements in this column
+            for idx in col_start..col_end {
+                let row = self.row_indices()[idx];
+                let value = T::from(self.values()[idx]).unwrap();
+                result[row] += value;
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -305,6 +454,104 @@ where
             }
         }
         Ok(())
+    }
+
+    fn var_col_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of rows ({})",
+                mask.len(),
+                self.nrows()
+            ));
+        }
+
+        // Calculate masked sums and counts
+        let sum: Vec<T> = self.sum_col_masked(mask)?;
+        let count: Vec<I> = self.nonzero_col_masked(mask)?;
+
+        let mut result = vec![T::zero(); self.ncols()];
+
+        // Process each column to calculate variance
+        for col in 0..self.ncols() {
+            if count[col] > I::zero() {
+                let mean = sum[col] / count[col].into();
+                let col_start = self.col_offsets()[col];
+                let col_end = self.col_offsets()[col + 1];
+
+                // Calculate sum of squared differences for this column (only for masked-in rows)
+                let mut sum_sq_diff = T::zero();
+                for idx in col_start..col_end {
+                    let row = self.row_indices()[idx];
+
+                    // Skip masked out rows
+                    if !mask[row] {
+                        continue;
+                    }
+
+                    let val = T::from(self.values()[idx]).unwrap();
+                    let diff = val - mean;
+                    sum_sq_diff += diff * diff;
+                }
+
+                result[col] = sum_sq_diff / count[col].into();
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn var_row_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        // Validate mask length
+        if mask.len() < self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Mask length ({}) is less than number of columns ({})",
+                mask.len(),
+                self.ncols()
+            ));
+        }
+
+        // Calculate masked sums and counts
+        let sum: Vec<T> = self.sum_row_masked(mask)?;
+        let count: Vec<I> = self.nonzero_row_masked(mask)?;
+
+        let mut result = vec![T::zero(); self.nrows()];
+        let mut squared_sums = vec![T::zero(); self.nrows()];
+
+        // Calculate sum of squares for each row (using only masked-in columns)
+        for col in 0..self.ncols() {
+            // Skip this column if masked out
+            if !mask[col] {
+                continue;
+            }
+
+            let col_start = self.col_offsets()[col];
+            let col_end = self.col_offsets()[col + 1];
+
+            for idx in col_start..col_end {
+                let row = self.row_indices()[idx];
+                let val = T::from(self.values()[idx]).unwrap();
+                squared_sums[row] += val * val;
+            }
+        }
+
+        // Calculate variance for each row
+        for row in 0..self.nrows() {
+            if count[row] > I::zero() {
+                let mean = sum[row] / count[row].into();
+                result[row] = squared_sums[row] / count[row].into() - mean * mean;
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -466,6 +713,285 @@ impl<T: NumericNormalize> Log1P<T> for CscMatrix<T> {
             *val = val.ln();
         }
         Ok(())
+    }
+}
+
+impl<M> BatchMatrixVariance for CscMatrix<M>
+where
+    M: NumericOps + NumCast,
+    CscMatrix<M>: MatrixSum + MatrixNonZero,
+{
+    type Item = M;
+
+    fn var_batch_row<I, T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Batch vector length ({}) doesn't match matrix row count ({})",
+                batches.len(),
+                self.nrows()
+            ));
+        }
+
+        // Create map of row indices to batch identifiers
+        let row_to_batch: Vec<&B> = batches.iter().collect();
+
+        // Group rows by batch
+        let mut batch_rows: HashMap<B, Vec<usize>> = HashMap::new();
+        for (row_idx, &batch) in row_to_batch.iter().enumerate() {
+            batch_rows.entry(batch.clone()).or_default().push(row_idx);
+        }
+
+        // Calculate variance for each batch
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+
+        for (batch, row_indices) in batch_rows {
+            // Calculate variance for each column across the rows in this batch
+            let mut batch_vars = vec![T::zero(); self.ncols()];
+
+            // Collect values for each column in this batch
+            let mut col_values: Vec<Vec<T>> = vec![Vec::new(); self.ncols()];
+
+            // Gather all values for each column from the batch's rows
+            for col_idx in 0..self.ncols() {
+                let col_start = self.col_offsets()[col_idx];
+                let col_end = self.col_offsets()[col_idx + 1];
+
+                for j in col_start..col_end {
+                    let row = self.row_indices()[j];
+
+                    // Check if this row is in the current batch
+                    if row_indices.contains(&row) {
+                        let val = T::from(self.values()[j]).unwrap();
+                        col_values[col_idx].push(val);
+                    }
+                }
+            }
+
+            // Calculate variance for each column
+            for (col_idx, values) in col_values.iter().enumerate() {
+                if values.len() > 1 {
+                    // Calculate mean
+                    let mean = values.iter().copied().sum::<T>() / T::from(values.len()).unwrap();
+
+                    // Calculate sum of squared differences
+                    let sum_sq_diff = values
+                        .iter()
+                        .map(|&val| {
+                            let diff = val - mean;
+                            diff * diff
+                        })
+                        .sum::<T>();
+
+                    // Calculate variance
+                    batch_vars[col_idx] = sum_sq_diff / T::from(values.len() - 1).unwrap();
+                }
+                // If values.len() <= 1, variance remains 0
+            }
+
+            result.insert(batch, batch_vars);
+        }
+
+        Ok(result)
+    }
+
+    fn var_batch_col<I, T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Batch vector length ({}) doesn't match matrix column count ({})",
+                batches.len(),
+                self.ncols()
+            ));
+        }
+
+        // Group column indices by batch
+        let mut batch_indices: HashMap<B, Vec<usize>> = HashMap::new();
+        for (idx, batch) in batches.iter().enumerate() {
+            batch_indices.entry(batch.clone()).or_default().push(idx);
+        }
+
+        // Calculate variance for each batch
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+
+        for (batch, indices) in batch_indices {
+            // Calculate variance for each row across the columns in this batch
+            let mut batch_vars = vec![T::zero(); self.nrows()];
+            let mut batch_means = vec![T::zero(); self.nrows()];
+            let mut batch_counts = vec![0usize; self.nrows()];
+            let mut batch_sum_sq = vec![T::zero(); self.nrows()];
+
+            // First pass: calculate sum and count for each row
+            for &col_idx in &indices {
+                let col_start = self.col_offsets()[col_idx];
+                let col_end = self.col_offsets()[col_idx + 1];
+
+                for j in col_start..col_end {
+                    let row = self.row_indices()[j];
+                    let val = T::from(self.values()[j]).unwrap();
+                    batch_means[row] = batch_means[row] + val;
+                    batch_counts[row] += 1;
+                }
+            }
+
+            // Calculate means
+            for (mean, &count) in batch_means.iter_mut().zip(batch_counts.iter()) {
+                if count > 0 {
+                    *mean = *mean / T::from(count).unwrap();
+                }
+            }
+
+            // Second pass: calculate sum of squared differences from mean
+            for &col_idx in &indices {
+                let col_start = self.col_offsets()[col_idx];
+                let col_end = self.col_offsets()[col_idx + 1];
+
+                for j in col_start..col_end {
+                    let row = self.row_indices()[j];
+                    let val = T::from(self.values()[j]).unwrap();
+                    let diff = val - batch_means[row];
+                    batch_sum_sq[row] = batch_sum_sq[row] + diff * diff;
+                }
+            }
+
+            // Calculate variance
+            for ((var, &count), &sum_sq) in batch_vars
+                .iter_mut()
+                .zip(batch_counts.iter())
+                .zip(batch_sum_sq.iter())
+            {
+                if count > 1 {
+                    *var = sum_sq / T::from(count - 1).unwrap();
+                }
+            }
+
+            result.insert(batch, batch_vars);
+        }
+
+        Ok(result)
+    }
+}
+
+impl<M: NumericOps + NumCast> BatchMatrixMean for CscMatrix<M> {
+    type Item = M;
+
+    fn mean_batch_row<T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.ncols() {
+            return Err(anyhow::anyhow!(
+                "Number of batch identifiers ({}) must match number of columns ({})",
+                batches.len(),
+                self.ncols()
+            ));
+        }
+
+        // Group columns by batch
+        let mut batch_indices: HashMap<B, Vec<usize>> = HashMap::new();
+        for (col_idx, batch) in batches.iter().enumerate() {
+            batch_indices
+                .entry(batch.clone())
+                .or_default()
+                .push(col_idx);
+        }
+
+        // Calculate mean for each batch and row
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+        for (batch, col_indices) in batch_indices {
+            let mut batch_sums = vec![T::zero(); self.nrows()];
+            let mut batch_counts = vec![0usize; self.nrows()];
+
+            // Calculate sums and counts for each column in this batch
+            for &col_idx in &col_indices {
+                let col_start = self.col_offsets()[col_idx];
+                let col_end = self.col_offsets()[col_idx + 1];
+
+                for idx in col_start..col_end {
+                    let row_idx = self.row_indices()[idx];
+                    batch_sums[row_idx] += T::from(self.values()[idx]).unwrap();
+                    batch_counts[row_idx] += 1;
+                }
+            }
+
+            // Calculate means
+            let mut batch_means = vec![T::zero(); self.nrows()];
+            for row_idx in 0..self.nrows() {
+                if batch_counts[row_idx] > 0 {
+                    batch_means[row_idx] = batch_sums[row_idx] / T::from(batch_counts[row_idx]).unwrap();
+                }
+            }
+
+            result.insert(batch, batch_means);
+        }
+
+        Ok(result)
+    }
+
+    fn mean_batch_col<T, B>(&self, batches: &[B]) -> anyhow::Result<HashMap<B, Vec<T>>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum,
+        B: BatchIdentifier,
+    {
+        if batches.len() != self.nrows() {
+            return Err(anyhow::anyhow!(
+                "Number of batch identifiers ({}) must match number of rows ({})",
+                batches.len(),
+                self.nrows()
+            ));
+        }
+
+        // Group rows by batch
+        let mut batch_indices: HashMap<B, Vec<usize>> = HashMap::new();
+        for (row_idx, batch) in batches.iter().enumerate() {
+            batch_indices
+                .entry(batch.clone())
+                .or_default()
+                .push(row_idx);
+        }
+
+        // Calculate mean for each batch and column
+        let mut result: HashMap<B, Vec<T>> = HashMap::new();
+        for (batch, row_indices) in batch_indices {
+            let row_indices_set: HashSet<usize> = row_indices.iter().cloned().collect();
+            let mut batch_sums = vec![T::zero(); self.ncols()];
+            let mut batch_counts = vec![0usize; self.ncols()];
+
+            // Calculate sums and counts for each column
+            for col_idx in 0..self.ncols() {
+                let col_start = self.col_offsets()[col_idx];
+                let col_end = self.col_offsets()[col_idx + 1];
+
+                for idx in col_start..col_end {
+                    let row_idx = self.row_indices()[idx];
+                    if row_indices_set.contains(&row_idx) {
+                        batch_sums[col_idx] += T::from(self.values()[idx]).unwrap();
+                        batch_counts[col_idx] += 1;
+                    }
+                }
+            }
+
+            // Calculate means
+            let mut batch_means = vec![T::zero(); self.ncols()];
+            for col_idx in 0..self.ncols() {
+                if batch_counts[col_idx] > 0 {
+                    batch_means[col_idx] = batch_sums[col_idx] / T::from(batch_counts[col_idx]).unwrap();
+                }
+            }
+
+            result.insert(batch, batch_means);
+        }
+
+        Ok(result)
     }
 }
 
@@ -707,16 +1233,11 @@ mod tests {
             assert!((sum - target).abs() < 1e-10);
         }
     }
-    
+
     #[test]
     fn test_zero_elements() {
-        let coo = CooMatrix::try_from_triplets(
-            2,
-            2,
-            vec![0, 1],
-            vec![0, 1],
-            vec![0.0, 0.0f64],
-        ).unwrap();
+        let coo =
+            CooMatrix::try_from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![0.0, 0.0f64]).unwrap();
         let mut csc: CscMatrix<f64> = (&coo).into();
 
         csc.log1p_normalize().unwrap();
