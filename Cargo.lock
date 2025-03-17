@@ -2077,19 +2077,20 @@ dependencies = [
 
 [[package]]
 name = "single-svdlib"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecbba370edb24274566bab5943a110ff7ed219cc2ff19312c29995ad49e95ab7"
+checksum = "409233e7700083904a79b4800ffcdc228c531784ebb57f7e281e88a1197b761c"
 dependencies = [
  "nalgebra-sparse",
  "ndarray 0.16.1",
+ "num-traits",
  "rand 0.8.5",
  "thiserror 2.0.9",
 ]
 
 [[package]]
 name = "single_algebra"
-version = "0.2.2-alpha.0"
+version = "0.2.3-alpha.0"
 dependencies = [
  "ahash",
  "anyhow",
