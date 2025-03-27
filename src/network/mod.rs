@@ -12,7 +12,7 @@ use rayon::iter::ParallelIterator;
 use rayon::slice::ParallelSlice;
 use std::collections::HashMap;
 
-pub(crate) mod clustering;
+pub mod clustering;
 
 // for now
 pub type Graph<N, E> = UnGraph<N, E>;
