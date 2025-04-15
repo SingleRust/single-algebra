@@ -6,6 +6,7 @@ use nalgebra_sparse::CsrMatrix;
 use ndarray::{s, Array1, Array2};
 use single_svdlib::lanczos::svd_las2;
 use single_svdlib::randomized::randomized_svd;
+use nalgebra::RealField;
 
 pub struct SparsePCA<T>
 where
@@ -25,7 +26,7 @@ where
 
 impl<T> SparsePCA<T>
 where
-    T: single_svdlib::SvdFloat + NumericOps + 'static + nalgebra::RealField,
+    T: single_svdlib::SvdFloat + NumericOps + 'static + RealField,
 {
     pub fn new(
         n_components: usize,
