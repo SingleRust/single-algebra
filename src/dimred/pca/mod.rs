@@ -3,12 +3,11 @@ mod sparse;
 
 mod sparse_masked;
 
-use single_svdlib::randomized::PowerIterationNormalizer;
 pub use sparse::SparsePCA;
 pub use sparse::SparsePCABuilder;
 pub use sparse_masked::MaskedSparsePCA;
 pub use sparse_masked::MaskedSparsePCABuilder;
-
+pub use single_svdlib::randomized::PowerIterationNormalizer;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SVDMethod {
