@@ -1,12 +1,11 @@
+use crate::dimred::pca::SVDMethod;
 use crate::sparse::MatrixSum;
 use crate::NumericOps;
 use anyhow::anyhow;
 use nalgebra_sparse::CsrMatrix;
 use ndarray::{s, Array1, Array2};
-use num_traits::Float;
-use single_svdlib::svd_las2;
-use std::fmt::Debug;
-use std::iter::Sum;
+use single_svdlib::lanczos::svd_las2;
+use single_svdlib::randomized::randomized_svd;
 
 pub struct SparsePCA<T>
 where
@@ -21,11 +20,12 @@ where
     mean_: Option<Array1<T>>,
     center: bool,
     verbose: bool,
+    svdmethod: SVDMethod,
 }
 
 impl<T> SparsePCA<T>
 where
-    T: single_svdlib::SvdFloat + NumericOps + 'static,
+    T: single_svdlib::SvdFloat + NumericOps + 'static + nalgebra::RealField,
 {
     pub fn new(
         n_components: usize,
@@ -34,6 +34,7 @@ where
         random_seed: Option<u32>,
         center: bool,
         verbose: bool,
+        svdmethod: SVDMethod,
     ) -> Self {
         Self {
             n_components,
@@ -45,6 +46,7 @@ where
             mean_: None,
             center,
             verbose,
+            svdmethod,
         }
     }
 
@@ -60,33 +62,75 @@ where
             ));
         }
 
-        let optimal_iterations = n_samples.max(n_features);
-        let svd = svd_las2(
-            x,
-            self.n_components,
-            optimal_iterations,
-            &[T::from(-1.0e-30).unwrap(), T::from(1.0e30).unwrap()],
-            T::from(10e-6).unwrap(),
-            self.random_seed,
-        )
-        .map_err(|e| anyhow!("SVD computation failed: {}", e))?;
+        match self.svdmethod {
+            SVDMethod::Lanczos => {
+                let optimal_iterations = n_samples.max(n_features);
+                let svd_masked = svd_las2(
+                    x,
+                    self.n_components,
+                    optimal_iterations,
+                    &[T::from(-1.0e-30).unwrap(), T::from(1.0e30).unwrap()],
+                    T::from(10e-6).unwrap(),
+                    self.random_seed,
+                )
+                .map_err(|e| anyhow!("SVD computation failed: {}", e))?;
 
-        let components = svd.vt.slice(s![..self.n_components, ..]).to_owned();
+                let components = svd_masked.vt.slice(s![..self.n_components, ..]).to_owned();
 
-        if self.verbose {
-            println!("Dimensionality reduction summary:");
-            println!(
-                "  Input shape: {} samples × {} features",
-                n_samples, n_features
-            );
-            println!("  Reduced to: {} components", self.n_components);
-            println!(
-                "  Compression ratio: {:.2}%",
-                (self.n_components as f64 / n_features as f64) * 100.0
-            );
+                if self.verbose {
+                    println!("SVD using Lanczos algorithm:");
+                    println!(
+                        "  Input shape: {} samples × {} features",
+                        n_samples, n_features
+                    );
+                    println!("  Reduced to: {} components", self.n_components);
+                    println!(
+                        "  Compression ratio: {:.2}%",
+                        (self.n_components as f64 / n_features as f64) * 100.0
+                    );
+                }
+
+                Ok(components)
+            }
+            SVDMethod::Random {
+                n_oversamples,
+                n_power_iterations,
+                normalizer,
+            } => {
+                if self.verbose {
+                    println!("Computing randomized SVD...");
+                }
+
+                let svd_result = randomized_svd(
+                    x,
+                    self.n_components,
+                    n_oversamples,
+                    n_power_iterations,
+                    normalizer,
+                    Some(self.random_seed as u64),
+                )
+                .map_err(|e| anyhow!("Randomized SVD computation failed: {}", e))?;
+
+                let components = svd_result.vt.slice(s![..self.n_components, ..]).to_owned();
+
+                if self.verbose {
+                    println!("SVD using randomized algorithm:");
+                    println!(
+                        "  Input shape: {} samples × {} features",
+                        n_samples, n_features
+                    );
+                    println!("  Reduced to: {} components", self.n_components);
+                    println!(
+                        "  Compression ratio: {:.2}%",
+                        (self.n_components as f64 / n_features as f64) * 100.0
+                    );
+                    println!("  Oversampling: {}", n_oversamples);
+                    println!("  Power iterations: {}", n_power_iterations);
+                }
+
+                Ok(components)
+            }
         }
-
-        Ok(components)
     }
 
     pub fn fit(&mut self, x: &CsrMatrix<T>, max_iter: Option<usize>) -> anyhow::Result<&mut Self> {
@@ -152,14 +196,14 @@ where
                             loading += effective_val * u[[row_idx, k]];
                         }
                     }
-                    let sign = loading.signum();
-                    let magnitude = loading.abs();
-                    v[[j, k]] = sign * T::zero().max(magnitude - self.alpha);
+                    let sign = num_traits::Float::signum(loading);
+                    let magnitude = num_traits::Float::abs(loading);
+                    v[[j, k]] = sign * num_traits::Float::max(T::zero(), (magnitude - self.alpha));
                 }
             }
 
             for k in 0..self.n_components {
-                let norm = v.column(k).iter().map(|&x| x * x).sum::<T>().sqrt();
+                let norm = num_traits::Float::sqrt(v.column(k).iter().map(|&x| x * x).sum::<T>());
                 if norm > T::zero() {
                     for j in 0..n_features {
                         v[[j, k]] = v[[j, k]] / norm;
@@ -168,11 +212,12 @@ where
                 }
             }
 
-            let diff = (&components - &prev_components)
-                .iter()
-                .map(|&x| x * x)
-                .sum::<T>()
-                .sqrt();
+            let diff = num_traits::Float::sqrt(
+                (&components - &prev_components)
+                    .iter()
+                    .map(|&x| x * x)
+                    .sum::<T>(),
+            );
 
             converged = diff < self.tolerance;
             iter += 1;
@@ -281,6 +326,7 @@ where
     random_seed: Option<u32>,
     center: bool,
     verbose: bool,
+    svdmethod: SVDMethod,
 }
 
 impl<T> Default for SparsePCABuilder<T>
@@ -295,6 +341,7 @@ where
             random_seed: Some(42),
             center: true,
             verbose: false,
+            svdmethod: SVDMethod::default(),
         }
     }
 }
@@ -337,6 +384,11 @@ where
         self
     }
 
+    pub fn svd_method(mut self, svdmethod: SVDMethod) -> Self {
+        self.svdmethod = svdmethod;
+        self
+    }
+
     pub fn build(self) -> SparsePCA<T> {
         SparsePCA {
             n_components: self.n_components,
@@ -348,6 +400,7 @@ where
             mean_: None,
             center: self.center,
             verbose: self.verbose,
+            svdmethod: self.svdmethod,
         }
     }
 }
