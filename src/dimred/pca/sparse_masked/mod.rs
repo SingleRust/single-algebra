@@ -3,6 +3,7 @@ use crate::sparse::MatrixSum;
 use crate::NumericOps;
 use anyhow::anyhow;
 use nalgebra_sparse::CsrMatrix;
+use nalgebra::RealField;
 use ndarray::{s, Array1, Array2};
 use single_svdlib::randomized::randomized_svd;
 use single_svdlib::{lanczos::masked::MaskedCSRMatrix, lanczos::svd_las2};
@@ -123,7 +124,7 @@ where
 
 impl<T> MaskedSparsePCA<T>
 where
-    T: single_svdlib::SvdFloat + NumericOps + 'static + nalgebra::RealField,
+    T: single_svdlib::SvdFloat + NumericOps + 'static + RealField,
 {
     pub fn new(
         n_components: usize,
