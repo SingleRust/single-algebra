@@ -2,11 +2,15 @@ use crate::dimred::pca::SVDMethod;
 use crate::sparse::MatrixSum;
 use crate::NumericOps;
 use anyhow::anyhow;
-use nalgebra_sparse::CsrMatrix;
 use nalgebra::RealField;
-use ndarray::{s, Array1, Array2};
-use single_svdlib::randomized::randomized_svd;
-use single_svdlib::{lanczos::masked::MaskedCSRMatrix, lanczos::svd_las2};
+use nalgebra_sparse::CsrMatrix;
+use ndarray::{Array1, Array2};
+use nshare::{IntoNalgebra, IntoNdarray2};
+use rayon::iter::ParallelIterator;
+use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
+use single_svdlib::lanczos::masked::MaskedCSRMatrix;
+use single_svdlib::{lanczos, randomized};
+use std::collections::HashMap;
 
 pub struct MaskedSparsePCABuilder<T>
 where
@@ -151,99 +155,14 @@ where
         }
     }
 
-    pub fn initialize_components(&self, x: &CsrMatrix<T>) -> anyhow::Result<Array2<T>> {
+    pub fn fit(&mut self, x: &CsrMatrix<T>) -> anyhow::Result<&mut Self> {
         let n_samples = x.nrows();
         if x.ncols() != self.mask.len() {
             return Err(anyhow!(
                 "The mask vector length and the number of features (columns) have to be the same!"
             ));
         }
-        let mut n_features = 0usize;
-        for f in self.mask.clone() {
-            if f {
-                n_features += 1;
-            }
-        }
 
-        let masked_matrix = MaskedCSRMatrix::new(x, self.mask.clone());
-        match self.svd_method {
-            SVDMethod::Lanczos => {
-                let optimal_iterations = n_samples.max(n_features);
-                let svd_masked = svd_las2(
-                    &masked_matrix,
-                    self.n_components,
-                    optimal_iterations,
-                    &[T::from(-1.0e-30).unwrap(), T::from(1.0e30).unwrap()],
-                    T::from(10e-6).unwrap(),
-                    self.random_seed,
-                )
-                .map_err(|e| anyhow!("SVD computation failed: {}", e))?;
-
-                let components = svd_masked.vt.slice(s![..self.n_components, ..]).to_owned();
-
-                if self.verbose {
-                    println!("SVD using Lanczos algorithm:");
-                    println!(
-                        "  Input shape: {} samples × {} features",
-                        n_samples, n_features
-                    );
-                    println!("  Reduced to: {} components", self.n_components);
-                    println!(
-                        "  Compression ratio: {:.2}%",
-                        (self.n_components as f64 / n_features as f64) * 100.0
-                    );
-                }
-
-                Ok(components)
-            }
-            SVDMethod::Random {
-                n_oversamples,
-                n_power_iterations,
-                normalizer,
-            } => {
-                if self.verbose {
-                    println!("Computing randomized SVD...");
-                }
-
-                let svd_result = randomized_svd(
-                    &masked_matrix,
-                    self.n_components,
-                    n_oversamples,
-                    n_power_iterations,
-                    normalizer,
-                    Some(self.random_seed as u64),
-                )
-                .map_err(|e| anyhow!("Randomized SVD computation failed: {}", e))?;
-
-                let components = svd_result.vt.slice(s![..self.n_components, ..]).to_owned();
-
-                if self.verbose {
-                    println!("SVD using randomized algorithm:");
-                    println!(
-                        "  Input shape: {} samples × {} features",
-                        n_samples, n_features
-                    );
-                    println!("  Reduced to: {} components", self.n_components);
-                    println!(
-                        "  Compression ratio: {:.2}%",
-                        (self.n_components as f64 / n_features as f64) * 100.0
-                    );
-                    println!("  Oversampling: {}", n_oversamples);
-                    println!("  Power iterations: {}", n_power_iterations);
-                }
-
-                Ok(components)
-            }
-        }
-    }
-
-    pub fn fit(&mut self, x: &CsrMatrix<T>, max_iter: Option<usize>) -> anyhow::Result<&mut Self> {
-        let n_samples = x.nrows();
-        if x.ncols() != self.mask.len() {
-            return Err(anyhow!(
-                "The mask vector length and the number of features (columns) have to be the same!"
-            ));
-        }
         let mut n_features = 0usize;
         let mut cols_to_use: Vec<usize> = Vec::new();
         for (ind, &val) in self.mask.iter().enumerate() {
@@ -252,6 +171,7 @@ where
                 cols_to_use.push(ind);
             }
         }
+
         let n_t_samples = T::from(n_samples).unwrap();
 
         if self.center {
@@ -264,99 +184,112 @@ where
             );
             self.mean_ = Some(mean);
         } else {
-            self.mean_ = Some(Array1::zeros(n_features));
+            self.mean_ = Some(Array1::zeros(x.ncols()));
         }
 
-        let mut components = self.initialize_components(x)?;
-        let max_iter = max_iter.unwrap_or(1000);
+        let mut total_var = T::zero();
+        if self.center {
+            let col_sums: Vec<T> = x.sum_col()?;
+            let col_sq_sums: Vec<T> = x.sum_col_squared()?;
+            let n_minus_1 = n_t_samples - T::one();
 
-        let mut converged = false;
-        let mut iter = 0;
-
-        let mut u = Array2::zeros((n_samples, self.n_components));
-        let mut v = Array2::zeros((n_features, self.n_components));
-
-        let mean = self.mean_.as_ref().unwrap();
-
-        while !converged && iter < max_iter {
-            let prev_components = components.clone();
-
-            for (row_idx, row) in x.row_iter().enumerate() {
-                for k in 0..self.n_components {
-                    let mut score = T::zero();
-                    for (idx, &col_idx) in cols_to_use.iter().enumerate() {
-                        let val = row.get_entry(col_idx).unwrap().into_value();
-                        let effective_val = if self.center {
-                            val - mean[col_idx]
-                        } else {
-                            val
-                        };
-                        score += effective_val * components[[k, idx]];
-                    }
-                    u[[row_idx, k]] = score;
-                }
-            }
-
-            for j in 0..n_features {
-                let col_idx = cols_to_use[j];
-                for k in 0..self.n_components {
-                    let mut loading = T::zero();
-
-                    for (row_idx, row) in x.row_iter().enumerate() {
-                        if let Some(val) = row.get_entry(col_idx) {
-                            let effective_val = if self.center {
-                                val.into_value() - mean[col_idx]
-                            } else {
-                                val.into_value()
-                            };
-
-                            loading += effective_val * u[[row_idx, k]];
-                        }
-                    }
-                    let sign = num_traits::Float::signum(loading);
-                    let magnitude = num_traits::Float::abs(loading);
-                    v[[j, k]] = sign * num_traits::Float::max(T::zero(), (magnitude - self.alpha));
-                    //T::zero().max(magnitude - self.alpha);
-                }
-            }
-
-            for k in 0..self.n_components {
-                let norm = num_traits::Float::sqrt(v.column(k).iter().map(|&x| x * x).sum::<T>());
-                if norm > T::zero() {
-                    for j in 0..n_features {
-                        v[[j, k]] = v[[j, k]] / norm;
-                        components[[k, j]] = v[[j, k]];
-                    }
-                }
-            }
-
-            let diff = num_traits::Float::sqrt(
-                (&components - &prev_components)
-                    .iter()
-                    .map(|&x| x * x)
-                    .sum::<T>(),
-            );
-
-            converged = diff < self.tolerance;
-            iter += 1;
-
-            if self.verbose {
-                println!("Fitting completed after {} iterations", iter);
-                if !converged {
-                    println!("Warning: Maximum iterations reached before convergence");
-                }
+            for &j in &cols_to_use {
+                let mean = col_sums[j] / n_t_samples;
+                let var = (col_sq_sums[j] - mean * col_sums[j]) / n_minus_1;
+                total_var = total_var + var;
             }
         }
 
-        self.components_ = Some(components);
+        let masked_matrix = MaskedCSRMatrix::new(x, self.mask.clone());
 
+        let mut res = match self.svd_method {
+            SVDMethod::Lanczos => {
+                if self.verbose {
+                    println!("Computing SVD using Lanczos algorithm...");
+                }
+
+                let optimal_iterations = n_samples.max(n_features);
+                lanczos::svd_las2(
+                    &masked_matrix,
+                    self.n_components,
+                    optimal_iterations,
+                    &[T::from(-1.0e-30).unwrap(), T::from(1.0e30).unwrap()],
+                    T::from(10e-6).unwrap(),
+                    self.random_seed,
+                )
+                .map_err(|e| anyhow!("SVD computation failed: {}", e))?
+            }
+            SVDMethod::Random {
+                n_oversamples,
+                n_power_iterations,
+                normalizer,
+            } => {
+                if self.verbose {
+                    println!("Computing randomized SVD...");
+                }
+
+                randomized::randomized_svd(
+                    &masked_matrix,
+                    self.n_components,
+                    n_oversamples,
+                    n_power_iterations,
+                    normalizer,
+                    self.center,
+                    Some(self.random_seed as u64),
+                )
+                .map_err(|e| anyhow!("Randomized SVD computation failed: {}", e))?
+            }
+        };
+
+        let mut u = res.u.into_nalgebra();
+        let mut vt = res.vt.into_nalgebra();
+        randomized::svd_flip(Some(&mut u), Some(&mut vt), false)?;
+        res.u = u.into_ndarray2().into_owned();
+        res.vt = vt.into_ndarray2().into_owned();
+
+        self.components_ = Some(res.vt);
+
+        let n_minus_1 = T::from(n_samples - 1).unwrap();
         let mut explained_variance = Array1::zeros(self.n_components);
 
-        for k in 0..self.n_components {
-            let variance = u.column(k).dot(&u.column(k));
-            explained_variance[k] = variance / (n_t_samples - T::one());
+        for i in 0..self.n_components {
+            explained_variance[i] = num_traits::Float::powi(res.s[i], 2) / n_minus_1;
         }
-        self.explained_variance_ = Some(explained_variance);
+        self.explained_variance_ = Some(explained_variance.clone());
+
+        if !self.center {
+            total_var = T::zero();
+            for i in 0..res.s.len() {
+                total_var += num_traits::Float::powi(res.s[i], 2) / n_minus_1;
+            }
+        }
+
+        let min_dim = n_samples.min(n_features);
+        if self.n_components < min_dim {
+            let noise_var = (total_var - explained_variance.sum())
+                / T::from(min_dim - self.n_components).unwrap();
+
+            if self.verbose {
+                println!("Estimated noise variance: {}", noise_var);
+            }
+        }
+
+        if self.verbose {
+            println!("PCA completed successfully:");
+            println!(
+                "  Input shape: {} samples × {} features (using {} features with mask)",
+                n_samples,
+                x.ncols(),
+                n_features
+            );
+            println!("  Reduced to: {} components", self.n_components);
+            println!(
+                "  Total variance explained: {:.2}%",
+                (explained_variance.sum() / total_var * T::from(100.0).unwrap())
+                    .to_f64()
+                    .unwrap_or(0.0)
+            );
+        }
 
         Ok(self)
     }
@@ -369,13 +302,6 @@ where
             ));
         }
 
-        let mut cols_to_use: Vec<usize> = Vec::new();
-        for (ind, &val) in self.mask.iter().enumerate() {
-            if val {
-                cols_to_use.push(ind);
-            }
-        }
-
         let components = self
             .components_
             .as_ref()
@@ -385,25 +311,96 @@ where
             .as_ref()
             .ok_or_else(|| anyhow!("Must be fitted before transform!"))?;
 
+        let cols_to_use: Vec<usize> = self
+            .mask
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &val)| if val { Some(i) } else { None })
+            .collect();
+
+        let col_to_masked_idx: HashMap<usize, usize> = cols_to_use
+            .iter()
+            .enumerate()
+            .map(|(idx, &col)| (col, idx))
+            .collect();
+
+        let chunk_size = if n_samples > 10000 {
+            64
+        } else if n_samples > 1000 {
+            128
+        } else {
+            256
+        };
+
         let mut transformed = Array2::zeros((n_samples, self.n_components));
 
-        for (row_idx, row) in x.row_iter().enumerate() {
+        let results: Vec<(usize, Vec<T>)> = (0..n_samples)
+            .into_par_iter()
+            .chunks(chunk_size)
+            .flat_map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|&row_idx| {
+                        let row = x.row(row_idx);
+                        let mut scores = vec![T::zero(); self.n_components];
+
+                        for (&col_idx, &val) in row.col_indices().iter().zip(row.values().iter()) {
+                            if let Some(&masked_idx) = col_to_masked_idx.get(&col_idx) {
+                                let effective_val = if self.center {
+                                    val - mean[col_idx]
+                                } else {
+                                    val
+                                };
+
+                                if self.n_components <= 8 {
+                                    if self.n_components > 0 {
+                                        scores[0] += effective_val * components[[0, masked_idx]];
+                                    }
+                                    if self.n_components > 1 {
+                                        scores[1] += effective_val * components[[1, masked_idx]];
+                                    }
+                                    if self.n_components > 2 {
+                                        scores[2] += effective_val * components[[2, masked_idx]];
+                                    }
+                                    if self.n_components > 3 {
+                                        scores[3] += effective_val * components[[3, masked_idx]];
+                                    }
+                                    if self.n_components > 4 {
+                                        scores[4] += effective_val * components[[4, masked_idx]];
+                                    }
+                                    if self.n_components > 5 {
+                                        scores[5] += effective_val * components[[5, masked_idx]];
+                                    }
+                                    if self.n_components > 6 {
+                                        scores[6] += effective_val * components[[6, masked_idx]];
+                                    }
+                                    if self.n_components > 7 {
+                                        scores[7] += effective_val * components[[7, masked_idx]];
+                                    }
+                                } else {
+                                    for k in (0..self.n_components).step_by(4) {
+                                        let end = (k + 4).min(self.n_components);
+                                        for kk in k..end {
+                                            scores[kk] +=
+                                                effective_val * components[[kk, masked_idx]];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        (row_idx, scores)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        for (row_idx, scores) in results {
             for k in 0..self.n_components {
-                let mut score = T::zero();
-                for (cidx, &col_idx) in cols_to_use.iter().enumerate() {
-                    let val = row
-                        .get_entry(col_idx)
-                        .map_or(T::zero(), |entry| entry.into_value());
-                    let effective_val = if self.center {
-                        val - mean[col_idx]
-                    } else {
-                        val
-                    };
-                    score += effective_val * components[[k, cidx]];
-                }
-                transformed[[row_idx, k]] = score;
+                transformed[[row_idx, k]] = scores[k];
             }
         }
+
         Ok(transformed)
     }
 
@@ -440,10 +437,9 @@ where
 
     pub fn fit_transform(
         &mut self,
-        x: &CsrMatrix<T>,
-        max_iter: Option<usize>,
+        x: &CsrMatrix<T>
     ) -> anyhow::Result<Array2<T>> {
-        self.fit(x, max_iter)?;
+        self.fit(x)?;
         self.transform(x)
     }
 }

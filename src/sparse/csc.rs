@@ -11,7 +11,9 @@ use crate::{
     NumericOps,
 };
 
-use super::{BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
+use super::{
+    BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance,
+};
 use crate::utils::{BatchIdentifier, Log1P};
 use anyhow::anyhow;
 
@@ -315,6 +317,20 @@ where
                 let value = T::from(self.values()[idx]).unwrap();
                 result[row] += value;
             }
+        }
+
+        Ok(result)
+    }
+
+    fn sum_col_squared<T>(&self) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        let mut result = vec![T::zero(); self.ncols()];
+
+        for (_, col, &value) in self.triplet_iter() {
+            let val = T::from(value).unwrap();
+            result[col] += val * val;
         }
 
         Ok(result)
@@ -927,7 +943,8 @@ impl<M: NumericOps + NumCast> BatchMatrixMean for CscMatrix<M> {
             let mut batch_means = vec![T::zero(); self.nrows()];
             for row_idx in 0..self.nrows() {
                 if batch_counts[row_idx] > 0 {
-                    batch_means[row_idx] = batch_sums[row_idx] / T::from(batch_counts[row_idx]).unwrap();
+                    batch_means[row_idx] =
+                        batch_sums[row_idx] / T::from(batch_counts[row_idx]).unwrap();
                 }
             }
 
@@ -984,7 +1001,8 @@ impl<M: NumericOps + NumCast> BatchMatrixMean for CscMatrix<M> {
             let mut batch_means = vec![T::zero(); self.ncols()];
             for col_idx in 0..self.ncols() {
                 if batch_counts[col_idx] > 0 {
-                    batch_means[col_idx] = batch_sums[col_idx] / T::from(batch_counts[col_idx]).unwrap();
+                    batch_means[col_idx] =
+                        batch_sums[col_idx] / T::from(batch_counts[col_idx]).unwrap();
                 }
             }
 

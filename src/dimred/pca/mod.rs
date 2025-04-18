@@ -8,6 +8,7 @@ pub use sparse::SparsePCABuilder;
 pub use sparse_masked::MaskedSparsePCA;
 pub use sparse_masked::MaskedSparsePCABuilder;
 pub use single_svdlib::randomized::PowerIterationNormalizer;
+pub use single_svdlib::SvdFloat;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SVDMethod {

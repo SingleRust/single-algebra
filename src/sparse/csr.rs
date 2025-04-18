@@ -3,7 +3,9 @@ use std::hash::Hash;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign};
 
-use super::{BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance};
+use super::{
+    BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance,
+};
 use crate::utils::{BatchIdentifier, Log1P};
 use crate::{
     utils::{Normalize, NumericNormalize},
@@ -321,6 +323,20 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
                 let value = T::from(self.values()[idx]).unwrap();
                 result[row] += value;
             }
+        }
+
+        Ok(result)
+    }
+
+    fn sum_col_squared<T>(&self) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        let mut result = vec![T::zero(); self.ncols()];
+
+        for (_, col, &value) in self.triplet_iter() {
+            let val = T::from(value).unwrap();
+            result[col] += val * val;
         }
 
         Ok(result)

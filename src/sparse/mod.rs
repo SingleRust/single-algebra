@@ -65,6 +65,10 @@ pub trait MatrixSum {
     fn sum_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
         T: Float + NumCast + AddAssign + std::iter::Sum;
+    
+    fn sum_col_squared<T>(&self) -> anyhow::Result<Vec<T>> 
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
 }
 
 pub trait MatrixVariance {
