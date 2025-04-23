@@ -13,7 +13,7 @@ use std::ops::MulAssign;
 #[derive(Default)]
 pub struct StandardLocalMoving<T>
 where
-    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign,
+    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign,
 {
     resolution: T,
     cluster_weights: Vec<T>,
@@ -26,7 +26,7 @@ where
 
 impl<T> StandardLocalMoving<T>
 where
-    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign,
+    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign,
 {
     pub fn new(resolution: T) -> Self {
         StandardLocalMoving {
@@ -57,7 +57,7 @@ where
     ) -> bool
     where
         N: Float + FromPrimitive + ToPrimitive + Send + Sync,
-        E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign,
+        E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign,
         C: NetworkGrouping,
         R: RngCore,
     {
@@ -83,6 +83,7 @@ where
                 num_unused_clusters += 1;
             }
         }
+        //println!("Number of unused clusters: {:?}", num_unused_clusters);
 
         self.node_order.clear();
         self.node_order.extend(0..node_count);
@@ -93,9 +94,13 @@ where
         let mut num_unstable_nodes = node_count;
         let mut i = 0;
 
+        //println!("Total edge weight: {:?}, num unstable nodes: {:?}, i = {:?}", total_edge_weight.to_f64().unwrap(), num_unstable_nodes, i);
+
         while num_unstable_nodes > 0 {
+            //println!("ITERATION | Total edge weight: {:?}, num unstable nodes: {:?}, i = {:?}", total_edge_weight.to_f64().unwrap(), num_unstable_nodes, i);
             let node = self.node_order[i];
             let current_cluster = clustering.get_group(node);
+            //println!("ITERATION | Node: {:?}, Current Cluster: {:?}", node, current_cluster);
 
             // Remove node from current cluster
             let node_weight = T::from_f64(network.weight(node).to_f64().unwrap()).unwrap();
@@ -106,6 +111,7 @@ where
             if self.nodes_per_cluster[current_cluster] == 0 {
                 self.unused_clusters[num_unused_clusters] = current_cluster;
                 num_unused_clusters += 1;
+                //println!("ITERATION | Nodes per cluster == 0, num unused clusters {:?}", num_unused_clusters);
             }
 
             // Find neighboring clusters
@@ -115,8 +121,9 @@ where
             for (target, weight) in network.neighbors(node) {
                 let neighbor_cluster = clustering.get_group(target);
                 let edge_weight = T::from_f64(weight.to_f64().unwrap()).unwrap();
-
+                //println!("ITERATION | FORLOOP | target: {:?}, neighbor cluster: {:?}, edge_weight: {:?}", target, neighbor_cluster, edge_weight.to_f64().unwrap());
                 if self.edge_weight_per_cluster[neighbor_cluster] == T::zero() {
+                    //println!("ITERATION | FORLOOP | Is T::zero, edge_weight_per_cluster");
                     self.neighboring_clusters[num_neighboring_clusters] = neighbor_cluster;
                     num_neighboring_clusters += 1;
                 }
@@ -130,18 +137,20 @@ where
                 - (node_weight * self.cluster_weights[current_cluster] * self.resolution)
                     / (T::from_f64(2.0).unwrap() * total_edge_weight);
 
+            //println!("ITERATION | Best Cluster {:?} Max Quality Increment {:?}", best_cluster, max_quality_increment.to_f64().unwrap());
+
             for &cluster in &self.neighboring_clusters[..num_neighboring_clusters] {
                 let quality_increment = self.edge_weight_per_cluster[cluster]
                     - (node_weight * self.cluster_weights[cluster] * self.resolution)
                         / (T::from_f64(2.0).unwrap() * total_edge_weight);
-
+                //println!("ITERATION | Cluster {:?} Quality Increment {:?}", cluster, quality_increment.to_f64().unwrap());
                 if quality_increment > max_quality_increment
                     || (quality_increment == max_quality_increment && cluster < best_cluster)
                 {
                     best_cluster = cluster;
                     max_quality_increment = quality_increment;
+                    //println!("ITERATION | Passes if for quality improvement")
                 }
-
                 self.edge_weight_per_cluster[cluster] = T::zero();
             }
 
@@ -161,6 +170,7 @@ where
             }
 
             i = (i + 1) % node_count;
+            //println!("END: {:?} best cluster {:?} num unstable nodes {:?} num unused clusters {:?}", i, best_cluster, num_unstable_nodes, num_unused_clusters)
         }
 
         if update {

@@ -48,7 +48,7 @@ where
 impl<N, E> Network<N, E>
 where
     N: Float + FromPrimitive + ToPrimitive + Send + Sync,
-    E: Float + FromPrimitive + ToPrimitive + Send + Sync + std::iter::Sum + std::ops::MulAssign,
+    E: Float + FromPrimitive + ToPrimitive + Send + Sync + std::iter::Sum + std::ops::MulAssign + std::ops::AddAssign,
 {
     pub fn new() -> Self {
         Network {
@@ -134,7 +134,7 @@ where
             }
 
             let (min_g, max_g) = if g1 < g2 { (g1, g2) } else { (g2, g1) };
-            *edge_memo.entry((min_g, max_g)).or_insert(E::zero()) *= *edge.weight();
+            *edge_memo.entry((min_g, max_g)).or_insert(E::zero()) += *edge.weight();
         }
 
         for (&(g1, g2), &weight) in edge_memo.iter() {
@@ -218,7 +218,7 @@ where
 impl<N, E> Default for Network<N, E>
 where
     N: Float + FromPrimitive + ToPrimitive + Send + Sync,
-    E: Float + FromPrimitive + ToPrimitive + Send + Sync + std::iter::Sum + std::ops::MulAssign,
+    E: Float + FromPrimitive + ToPrimitive + Send + Sync + std::iter::Sum + std::ops::MulAssign + std::ops::AddAssign,
 {
     fn default() -> Self {
         Self::new()
@@ -227,7 +227,7 @@ where
 
 pub fn network_from_matrix<T>(csr_matrix: &CsrMatrix<T>) -> Network<T, T>
 where
-    T: Float + FromPrimitive + ToPrimitive + Send + Sync + std::iter::Sum + std::ops::MulAssign,
+    T: Float + FromPrimitive + ToPrimitive + Send + Sync + std::iter::Sum + std::ops::MulAssign + std::ops::AddAssign,
 {
     let n_nodes = csr_matrix.ncols();
     let mut graph = UnGraph::with_capacity(n_nodes, csr_matrix.nnz());

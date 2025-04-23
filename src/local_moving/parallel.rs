@@ -41,7 +41,7 @@ where
     pub fn iterate<N, E, G>(&mut self, network: &Network<N, E>, clustering: &mut G) -> bool
     where
         N: Float + FromPrimitive + ToPrimitive + Send + Sync,
-        E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign,
+        E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign,
         G: NetworkGrouping + Send + Sync,
     {
         let node_count = network.nodes();
