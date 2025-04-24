@@ -2,7 +2,6 @@
 // Copyright 2018 Juan Morales (crispamares@gmail.com)
 // Repository: https://github.com/graphext/louvain-rs/tree/master
 // Licensed under the MIT License.
-use num_traits::WrappingAdd;
 use rayon::prelude::*;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -66,6 +65,14 @@ pub trait NetworkGrouping: Debug + Send + Sync {
                 self.set_group(node, new_group);
             }
         }
+        self.normalize_groups();
+    }
+
+    fn clear(&mut self) {
+        for i in 0..self.node_count() {
+            self.set_group(i, 0);
+        }
+
         self.normalize_groups();
     }
 }

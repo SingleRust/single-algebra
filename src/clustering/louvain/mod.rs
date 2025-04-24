@@ -25,7 +25,7 @@ where
     T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign, {
     pub fn new(resolution: T, seed: Option<u64>) -> Self {
         let seed = seed.unwrap_or_default();
-
+        println!("WARNING!!!!! This implementation extremely highly unfinished and will be moved to a separate package in the future!");
         Louvain {
             rng: ChaCha20Rng::seed_from_u64(seed),
             local_moving: StandardLocalMoving::new(resolution),
