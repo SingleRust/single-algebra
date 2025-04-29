@@ -1,13 +1,13 @@
 use anyhow::bail;
 use ndarray::Array2;
-
+use single_utilities::traits::FloatOpsTS;
+use single_utilities::types::Direction;
 use crate::{
-    utils::{Normalize, NumericNormalize},
-    Direction,
+    utils::{Normalize}
 };
 
-impl<T: NumericNormalize> Normalize<T> for Array2<T> {
-    fn normalize<U: NumericNormalize>(
+impl<T: FloatOpsTS> Normalize<T> for Array2<T> {
+    fn normalize<U: FloatOpsTS>(
         &mut self,
         sums: &[U],
         target: U,

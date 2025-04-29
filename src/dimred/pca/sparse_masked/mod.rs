@@ -1,6 +1,5 @@
 use crate::dimred::pca::SVDMethod;
 use crate::sparse::MatrixSum;
-use crate::NumericOps;
 use anyhow::anyhow;
 use nalgebra::RealField;
 use nalgebra_sparse::CsrMatrix;
@@ -9,12 +8,13 @@ use nshare::{IntoNalgebra, IntoNdarray2};
 use rayon::iter::ParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
 use single_svdlib::lanczos::masked::MaskedCSRMatrix;
-use single_svdlib::{lanczos, randomized};
+use single_svdlib::{lanczos, randomized, SvdFloat};
 use std::collections::HashMap;
+use single_utilities::traits::{FloatOpsTS};
 
 pub struct MaskedSparsePCABuilder<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + 'static + RealField + FloatOpsTS,
 {
     n_components: usize,
     alpha: T,
@@ -28,7 +28,7 @@ where
 
 impl<T> Default for MaskedSparsePCABuilder<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + 'static + RealField + FloatOpsTS,
 {
     fn default() -> Self {
         Self {
@@ -46,7 +46,7 @@ where
 
 impl<T> MaskedSparsePCABuilder<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + 'static + RealField + FloatOpsTS,
 {
     pub fn new() -> Self {
         Self::default()
@@ -111,7 +111,7 @@ where
 
 pub struct MaskedSparsePCA<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + 'static + RealField + FloatOpsTS,
 {
     n_components: usize,
     alpha: T,
@@ -128,7 +128,7 @@ where
 
 impl<T> MaskedSparsePCA<T>
 where
-    T: single_svdlib::SvdFloat + NumericOps + 'static + RealField,
+    T: SvdFloat + 'static + RealField + FloatOpsTS,
 {
     pub fn new(
         n_components: usize,

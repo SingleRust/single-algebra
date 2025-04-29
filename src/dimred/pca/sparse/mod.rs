@@ -1,20 +1,19 @@
 use crate::dimred::pca::SVDMethod;
 use crate::sparse::MatrixSum;
-use crate::NumericOps;
 use anyhow::anyhow;
 use nalgebra::RealField;
 use nalgebra_sparse::CsrMatrix;
 use ndarray::{Array1, Array2};
 use nshare::{IntoNalgebra, IntoNdarray2};
-use rayon::iter::ParallelIterator;
-use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
 use single_svdlib::lanczos::svd_las2;
 use single_svdlib::randomized::randomized_svd;
+use single_svdlib::SvdFloat;
+use single_utilities::traits::{FloatOpsTS, NumericOpsTS};
 use std::ops::Div;
 
 pub struct SparsePCA<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
 {
     n_components: usize,
     alpha: T,
@@ -30,7 +29,7 @@ where
 
 impl<T> SparsePCA<T>
 where
-    T: single_svdlib::SvdFloat + NumericOps + 'static + RealField + ndarray::ScalarOperand,
+    T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
 {
     pub fn new(
         n_components: usize,
@@ -261,10 +260,7 @@ where
         Ok(cumulative)
     }
 
-    pub fn fit_transform(
-        &mut self,
-        x: &CsrMatrix<T>
-    ) -> anyhow::Result<Array2<T>> {
+    pub fn fit_transform(&mut self, x: &CsrMatrix<T>) -> anyhow::Result<Array2<T>> {
         self.fit(x)?;
         self.transform(x)
     }
@@ -272,7 +268,7 @@ where
 
 pub struct SparsePCABuilder<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
 {
     n_components: usize,
     alpha: T,
@@ -285,7 +281,7 @@ where
 
 impl<T> Default for SparsePCABuilder<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
 {
     fn default() -> Self {
         Self {
@@ -302,7 +298,7 @@ where
 
 impl<T> SparsePCABuilder<T>
 where
-    T: single_svdlib::SvdFloat,
+    T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
 {
     pub fn new() -> Self {
         Self::default()
@@ -432,13 +428,8 @@ mod test {
             .build();
 
         let thread_pool = ThreadPoolBuilder::new().num_threads(64).build().unwrap();
-        let res_fit = thread_pool.install(|| {
-            sparse_pca.fit(&random_matrix)
-        });
+        let res_fit = thread_pool.install(|| sparse_pca.fit(&random_matrix));
 
         assert!(res_fit.is_ok());
-
-        //let res = sparse_pca.transform(&random_matrix);
-        //assert!(res.is_ok())
     }
 }

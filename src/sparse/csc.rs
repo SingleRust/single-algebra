@@ -1,21 +1,20 @@
 use nalgebra_sparse::CscMatrix;
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
+use single_utilities::types::Direction;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::Sum;
 use std::ops::Add;
 use std::ops::AddAssign;
 
-use crate::{
-    utils::{Normalize, NumericNormalize},
-    NumericOps,
-};
+use crate::utils::Normalize;
 
 use super::{
     BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance,
 };
 use crate::utils::{BatchIdentifier, Log1P};
 use anyhow::anyhow;
+use single_utilities::traits::{FloatOpsTS, NumericOps};
 
 impl<M: NumericOps + NumCast> MatrixNonZero for CscMatrix<M> {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -679,12 +678,12 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
     }
 }
 
-impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
-    fn normalize<U: NumericNormalize>(
+impl<T: FloatOpsTS> Normalize<T> for CscMatrix<T> {
+    fn normalize<U: FloatOpsTS>(
         &mut self,
         sums: &[U],
         target: U,
-        direction: &crate::Direction,
+        direction: &Direction,
     ) -> anyhow::Result<()> {
         // Pre-compute scaling factors to avoid repeated divisions
         let scaling_factors: Vec<U> = sums
@@ -699,7 +698,7 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
             .collect();
 
         match direction {
-            crate::Direction::COLUMN => {
+            Direction::COLUMN => {
                 // Copy column offsets to avoid borrowing conflicts
                 let col_offsets = self.col_offsets().to_vec();
                 let ncols = self.ncols();
@@ -718,7 +717,7 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
                     }
                 }
             }
-            crate::Direction::ROW => {
+            Direction::ROW => {
                 // Get row indices before mutating values
                 let row_indices = self.row_indices().to_vec();
                 let values = self.values_mut();
@@ -736,7 +735,7 @@ impl<T: NumericNormalize> Normalize<T> for CscMatrix<T> {
     }
 }
 
-impl<T: NumericNormalize> Log1P<T> for CscMatrix<T> {
+impl<T: FloatOpsTS> Log1P<T> for CscMatrix<T> {
     fn log1p_normalize(&mut self) -> anyhow::Result<()> {
         let values = self.values_mut();
         for val in values.iter_mut() {
@@ -1030,7 +1029,7 @@ impl<M: NumericOps + NumCast> BatchMatrixMean for CscMatrix<M> {
 
 #[cfg(test)]
 mod tests {
-    use crate::Direction;
+    use Direction;
 
     use super::*;
     use nalgebra_sparse::{CooMatrix, CscMatrix};
