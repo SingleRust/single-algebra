@@ -68,9 +68,6 @@ Available features:
 - `lapack`: Use the LAPACK backend for linear algebra operations
 - `faer`: Use the Faer backend for linear algebra operations
 - `simba`: Enable SIMD optimizations via simba
-- `clustering`: Enable clustering algorithms (includes network and local_moving)
-- `network`: Enable network-based algorithms
-- `local_moving`: Enable local moving algorithm for community detection
 
 ## Usage Examples
 
