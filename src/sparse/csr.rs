@@ -341,6 +341,20 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
         Ok(result)
     }
+
+    fn sum_row_squared<T>(&self) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum,
+    {
+        let mut result = vec![T::zero(); self.ncols()];
+
+        for (row, _, &value) in self.triplet_iter() {
+            let val = T::from(value).unwrap();
+            result[row] += val * val;
+        }
+
+        Ok(result)
+    }
 }
 
 impl<M> MatrixVariance for CsrMatrix<M>
@@ -356,21 +370,19 @@ where
         T: Float + NumCast + AddAssign + std::iter::Sum,
     {
         let sum: Vec<T> = self.sum_col()?;
-        let count: Vec<I> = self.nonzero_col()?;
+        let squared_sums: Vec<T> = self.sum_col_squared()?;
         let mut result = vec![T::zero(); self.ncols()];
-        let mut squared_sums = vec![T::zero(); self.ncols()];
 
-        // First pass: calculate squared sums for each column
-        for (value, &col) in self.values().iter().zip(self.col_indices().iter()) {
-            let val = T::from(*value).unwrap();
-            squared_sums[col] += val * val;
-        }
-
-        // Second pass: calculate variances
+        let n = T::from(self.nrows()).unwrap();
+        let n_minus_one = n - T::one();
         for col in 0..self.ncols() {
-            if count[col] > I::zero() {
-                let mean = sum[col] / count[col].into();
-                result[col] = squared_sums[col] / count[col].into() - mean * mean;
+            let mean = sum[col] / n;
+            let population_var = squared_sums[col] / n - mean.powi(2);
+
+            if n_minus_one > T::zero() {
+                result[col] = population_var * (n / n_minus_one)
+            } else {
+                result[col] = T::zero();
             }
         }
 
@@ -384,32 +396,18 @@ where
         Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
-        let count: Vec<I> = self.nonzero_row()?;
+        let squared_sums: Vec<T> = self.sum_row_squared()?;
         let mut result = vec![T::zero(); self.nrows()];
-
-        // Calculate variance for each row
+        let n = T::from(self.nrows()).unwrap();
+        let n_minus_one = n - T::one();
         for row in 0..self.nrows() {
-            if count[row] > I::zero() {
-                let row_start = self.row_offsets()[row];
-                let row_end = self
-                    .row_offsets()
-                    .get(row + 1)
-                    .copied()
-                    .unwrap_or(self.values().len());
-                let mean = sum[row] / count[row].into();
+            let mean = sum[row] / n;
+            let population_var = squared_sums[row] / n - mean.powi(2);
 
-                // Calculate sum of squared differences for this row
-                let variance = self.values()[row_start..row_end]
-                    .iter()
-                    .filter_map(|&v| T::from(v))
-                    .map(|v| {
-                        let diff = v - mean;
-                        diff * diff
-                    })
-                    .sum::<T>()
-                    / count[row].into();
-
-                result[row] = variance;
+            if n_minus_one > T::zero() {
+                result[row] = population_var * (n / n_minus_one);
+            } else {
+                result[row] = T::zero();
             }
         }
 
