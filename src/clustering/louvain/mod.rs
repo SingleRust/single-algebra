@@ -12,24 +12,24 @@ use crate::local_moving::standard::StandardLocalMoving;
 use crate::network::{Graph, Network};
 use crate::network::clustering::{NetworkGrouping, VectorGrouping};
 
-pub const DEF_RES: f64 = 1.0;
-
 pub struct Louvain<T>
 where
-    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign, {
+    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign, {
     rng: ChaCha20Rng,
-    local_moving: StandardLocalMoving<T>
+    local_moving: StandardLocalMoving<T>,
+    iterno: u64
 }
 
 impl<T> Louvain<T>
 where
-    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign, {
+    T: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign, {
     pub fn new(resolution: T, seed: Option<u64>) -> Self {
         let seed = seed.unwrap_or_default();
-
+        println!("WARNING!!!!! This implementation extremely highly unfinished and will be moved to a separate package in the future!");
         Louvain {
             rng: ChaCha20Rng::seed_from_u64(seed),
-            local_moving: StandardLocalMoving::new(resolution)
+            local_moving: StandardLocalMoving::new(resolution),
+            iterno: 0
         }
     }
 
@@ -39,8 +39,8 @@ where
         clustering: &mut VectorGrouping
     ) -> bool
     where
-    N: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign,
-    E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign, {
+    N: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign,
+    E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign, {
         self.local_moving.iterate(network, clustering, &mut self.rng)
     }
 
@@ -50,8 +50,11 @@ where
         clustering: &mut VectorGrouping
     ) -> bool
     where
-        N: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign,
-        E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign {
+        N: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign,
+        E: Float + FromPrimitive + ToPrimitive + Send + Sync + Sum + MulAssign + std::ops::AddAssign {
+        let num_nodes = network.graph.node_count();
+        println!("Running iteration, iteration: {:?}, num nodes: {:?}", self.iterno, num_nodes);
+        self.iterno += 1;
         let mut update = self.local_moving.iterate(network, clustering, &mut self.rng);
 
         if clustering.group_count() == network.nodes() {
@@ -132,7 +135,7 @@ mod tests {
     fn test_louvain_clustering() {
         let network = create_test_network();
         let mut clustering = VectorGrouping::create_isolated(network.nodes());
-        let mut louvain: Louvain<f64> = Louvain::new(DEF_RES.into(), Some(42));
+        let mut louvain: Louvain<f64> = Louvain::new(1.0, Some(42));
 
         assert!(louvain.iterate(&network, &mut clustering));
 
