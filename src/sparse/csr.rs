@@ -6,14 +6,13 @@ use std::ops::{Add, AddAssign};
 use super::{
     BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance,
 };
+use crate::utils::Normalize;
 use crate::utils::{BatchIdentifier, Log1P};
-use crate::{
-    utils::{Normalize, NumericNormalize},
-    NumericOps,
-};
 use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
 use num_traits::{Float, NumCast, One, PrimInt, Unsigned, Zero};
+use single_utilities::traits::{FloatOpsTS, NumericOps};
+use single_utilities::types::Direction;
 
 impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -367,7 +366,7 @@ where
     fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        T: Float + NumCast + AddAssign + Sum,
     {
         let sum: Vec<T> = self.sum_col()?;
         let squared_sums: Vec<T> = self.sum_col_squared()?;
@@ -392,7 +391,7 @@ where
     fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        T: Float + NumCast + AddAssign + Sum,
         Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
@@ -418,7 +417,7 @@ where
     fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        T: Float + NumCast + AddAssign + Sum,
         Self::Item: NumCast,
     {
         let ncols = self.ncols();
@@ -457,7 +456,7 @@ where
     fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        T: Float + NumCast + AddAssign + Sum,
         Self::Item: NumCast,
     {
         let nrows = self.nrows();
@@ -700,12 +699,12 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
     }
 }
 
-impl<T: NumericNormalize> Normalize<T> for CsrMatrix<T> {
-    fn normalize<U: NumericNormalize>(
+impl<T: FloatOpsTS> Normalize<T> for CsrMatrix<T> {
+    fn normalize<U: FloatOpsTS>(
         &mut self,
         sums: &[U],
         target: U,
-        direction: &crate::Direction,
+        direction: &Direction,
     ) -> anyhow::Result<()> {
         // Pre-compute scaling factors to avoid repeated divisions
         let scaling_factors: Vec<U> = sums
@@ -720,7 +719,7 @@ impl<T: NumericNormalize> Normalize<T> for CsrMatrix<T> {
             .collect();
 
         match direction {
-            crate::Direction::COLUMN => {
+            Direction::COLUMN => {
                 // Get an iterator over column indices before mutating values
                 let col_indices = self.col_indices().to_vec();
                 let values = self.values_mut();
@@ -733,7 +732,7 @@ impl<T: NumericNormalize> Normalize<T> for CsrMatrix<T> {
                     }
                 }
             }
-            crate::Direction::ROW => {
+            Direction::ROW => {
                 // Copy row offsets to avoid borrowing conflicts
                 let row_offsets = self.row_offsets().to_vec();
                 let nrows = self.nrows();
@@ -757,7 +756,7 @@ impl<T: NumericNormalize> Normalize<T> for CsrMatrix<T> {
     }
 }
 
-impl<T: NumericNormalize> Log1P<T> for CsrMatrix<T> {
+impl<T: FloatOpsTS> Log1P<T> for CsrMatrix<T> {
     fn log1p_normalize(&mut self) -> anyhow::Result<()> {
         let values = self.values_mut();
         for val in values.iter_mut() {
@@ -1036,7 +1035,7 @@ impl<M: NumericOps + NumCast> BatchMatrixMean for CsrMatrix<M> {
 
 #[cfg(test)]
 mod tests {
-    use crate::Direction;
+    use Direction;
 
     use super::*;
     use nalgebra_sparse::{CooMatrix, CscMatrix};

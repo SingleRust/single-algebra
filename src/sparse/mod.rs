@@ -3,8 +3,7 @@ use std::hash::Hash;
 use std::ops::AddAssign;
 
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
-
-use crate::NumericOps;
+use single_utilities::traits::NumericOps;
 use crate::utils::BatchIdentifier;
 
 pub mod csc;

@@ -4,7 +4,6 @@ use rand::{SeedableRng, rngs::StdRng};
 use std::time::Duration;
 use criterion::measurement::Measurement;
 use rand::distr::{Distribution, Uniform};
-use rayon::ThreadPool;
 use single_algebra::sparse::{MatrixNonZero, MatrixSum};
 
 #[derive(Clone)]
