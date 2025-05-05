@@ -9,8 +9,9 @@ use rayon::iter::ParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
 use single_svdlib::lanczos::masked::MaskedCSRMatrix;
 use single_svdlib::{lanczos, randomized, SvdFloat};
+use single_utilities::traits::FloatOpsTS;
 use std::collections::HashMap;
-use single_utilities::traits::{FloatOpsTS};
+use std::time::Instant;
 
 pub struct MaskedSparsePCABuilder<T>
 where
@@ -157,6 +158,7 @@ where
 
     pub fn fit(&mut self, x: &CsrMatrix<T>) -> anyhow::Result<&mut Self> {
         let n_samples = x.nrows();
+        let start = Instant::now();
         if x.ncols() != self.mask.len() {
             return Err(anyhow!(
                 "The mask vector length and the number of features (columns) have to be the same!"
@@ -175,6 +177,9 @@ where
         let n_t_samples = T::from(n_samples).unwrap();
 
         if self.center {
+            if self.verbose {
+                println!("PCA | SparseMasked | Initializing centering...")
+            }
             let col_sums: Vec<T> = x.sum_col()?;
             let mean = Array1::from(
                 col_sums
@@ -183,12 +188,18 @@ where
                     .collect::<Vec<T>>(),
             );
             self.mean_ = Some(mean);
+            if self.verbose {
+                println!("PCA | SparseMasked | Computed centering statistics, took: {:?} of total running time", start.elapsed());
+            }
         } else {
             self.mean_ = Some(Array1::zeros(x.ncols()));
         }
 
         let mut total_var = T::zero();
         if self.center {
+            if self.verbose {
+                println!("PCA | SparseMasked | Calculating total variance statistics....")
+            }
             let col_sums: Vec<T> = x.sum_col()?;
             let col_sq_sums: Vec<T> = x.sum_col_squared()?;
             let n_minus_1 = n_t_samples - T::one();
@@ -196,7 +207,10 @@ where
             for &j in &cols_to_use {
                 let mean = col_sums[j] / n_t_samples;
                 let var = (col_sq_sums[j] - mean * col_sums[j]) / n_minus_1;
-                total_var = total_var + var;
+                total_var += var;
+            }
+            if self.verbose {
+                println!("PCA | SparseMasked | Computed total variance statistics, took: {:?} of total running time", start.elapsed());
             }
         }
 
@@ -205,10 +219,10 @@ where
         let mut res = match self.svd_method {
             SVDMethod::Lanczos => {
                 if self.verbose {
-                    println!("Computing SVD using Lanczos algorithm...");
+                    println!("PCA | SparseMasked | Computing Lanczos SVD....")
                 }
 
-                let optimal_iterations = n_samples.max(n_features);
+                let optimal_iterations = (n_samples.max(n_features) * 2).max(100);
                 lanczos::svd_las2(
                     &masked_matrix,
                     self.n_components,
@@ -225,7 +239,7 @@ where
                 normalizer,
             } => {
                 if self.verbose {
-                    println!("Computing randomized SVD...");
+                    println!("PCA | SparseMasked | Computing Randomized SVD....")
                 }
 
                 randomized::randomized_svd(
@@ -236,10 +250,18 @@ where
                     normalizer,
                     self.center,
                     Some(self.random_seed as u64),
+                    self.verbose,
                 )
                 .map_err(|e| anyhow!("Randomized SVD computation failed: {}", e))?
             }
         };
+
+        if self.verbose {
+            println!(
+                "PCA | SparseMasked | Computed SVD, took: {:?} of total running time",
+                start.elapsed()
+            );
+        }
 
         let mut u = res.u.into_nalgebra();
         let mut vt = res.vt.into_nalgebra();
@@ -252,6 +274,12 @@ where
         let n_minus_1 = T::from(n_samples - 1).unwrap();
         let mut explained_variance = Array1::zeros(self.n_components);
 
+        println!(
+            "{:?}, components: {:?}, nfeatures: {:?}",
+            res.s.dim(),
+            self.n_components,
+            n_features
+        );
         for i in 0..self.n_components {
             explained_variance[i] = num_traits::Float::powi(res.s[i], 2) / n_minus_1;
         }
@@ -435,10 +463,7 @@ where
         Ok(cumulative)
     }
 
-    pub fn fit_transform(
-        &mut self,
-        x: &CsrMatrix<T>
-    ) -> anyhow::Result<Array2<T>> {
+    pub fn fit_transform(&mut self, x: &CsrMatrix<T>) -> anyhow::Result<Array2<T>> {
         self.fit(x)?;
         self.transform(x)
     }

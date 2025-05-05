@@ -81,7 +81,7 @@ where
             for j in 0..n_features {
                 let mean = col_sums[j] / n_t_samples;
                 let var = (col_sq_sums[j] - mean * col_sums[j]) / n_minus_1;
-                total_var = total_var + var;
+                total_var += var;
             }
         }
 
@@ -130,6 +130,7 @@ where
                     normalizer,
                     self.center,
                     Some(self.random_seed as u64),
+                    self.verbose,
                 )
                 .map_err(|e| anyhow!("Randomized SVD computation failed: {}", e))?;
 
