@@ -890,6 +890,7 @@ dependencies = [
  "num-complex",
  "num-rational",
  "num-traits",
+ "rayon",
  "serde",
  "simba",
  "typenum",
@@ -1715,11 +1716,12 @@ dependencies = [
 
 [[package]]
 name = "single-svdlib"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99397b683945ba88fe920432030afd4ef0a2a72a9ffbc987bdf5f47eec54ade1"
+checksum = "a96e837b4a40ffbd399f29058a0199091b7909e5b34b63e1dfa7a987433eb257"
 dependencies = [
  "anyhow",
+ "nalgebra",
  "nalgebra-sparse",
  "ndarray 0.16.1",
  "nshare",
@@ -1742,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "single_algebra"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "approx",
