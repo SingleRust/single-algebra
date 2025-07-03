@@ -6,6 +6,7 @@ use std::ops::{Add, AddAssign};
 use super::{
     BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance,
 };
+use crate::sparse::MatrixNTop;
 use crate::utils::Normalize;
 use crate::utils::{BatchIdentifier, Log1P};
 use anyhow::{anyhow, Ok};
@@ -1029,6 +1030,36 @@ impl<M: NumericOps + NumCast> BatchMatrixMean for CsrMatrix<M> {
             result.insert(batch, batch_means);
         }
 
+        Ok(result)
+    }
+}
+
+impl<M: NumericOps + NumCast> MatrixNTop for CsrMatrix<M> {
+    type Item = M;
+
+    fn sum_row_n_top<T>(&self, n: usize) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum {
+        let mut result = vec![T::zero(); self.nrows()];
+
+        for row_idx in 0..self.nrows() {
+            let row_start = self.row_offsets()[row_idx];
+            let row_end = self.row_offsets()[row_idx + 1];
+
+            let mut row_values: Vec<T> = Vec::new();
+            for idx in row_start..row_end {
+                if let Some(val) = T::from(self.values()[idx]) {
+                    row_values.push(val);
+                }
+            }
+
+            if row_values.len() <= n {
+                result[row_idx] = row_values.into_iter().sum();
+            } else {
+                row_values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                result[row_idx] = row_values.into_iter().take(n).sum();
+            }
+        }
         Ok(result)
     }
 }

@@ -164,4 +164,12 @@ pub trait BatchMatrixMean {
         B: BatchIdentifier;
 }
 
+pub trait MatrixNTop {
+    type Item: NumCast;
+
+    fn sum_row_n_top<T>(&self, n: usize) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + std::iter::Sum;
+}
+
 

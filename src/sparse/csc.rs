@@ -7,6 +7,7 @@ use std::iter::Sum;
 use std::ops::Add;
 use std::ops::AddAssign;
 
+use crate::sparse::MatrixNTop;
 use crate::utils::Normalize;
 
 use super::{
@@ -1023,6 +1024,41 @@ impl<M: NumericOps + NumCast> BatchMatrixMean for CscMatrix<M> {
             result.insert(batch, batch_means);
         }
 
+        Ok(result)
+    }
+}
+
+impl<M: NumericOps + NumCast> MatrixNTop for CscMatrix<M> {
+    type Item = M;
+
+    fn sum_row_n_top<T>(&self, n: usize) -> anyhow::Result<Vec<T>>
+    where
+        T: Float + NumCast + AddAssign + Sum {
+        let mut result = vec![T::zero(); self.nrows()];
+        
+        let mut row_values: Vec<Vec<T>> = vec![Vec::new(); self.nrows()];
+        
+        for col_idx in 0..self.ncols() {
+            let col_start = self.col_offsets()[col_idx];
+            let col_end = self.col_offsets()[col_idx + 1];
+            
+            for idx in col_start..col_end {
+                let row_idx = self.row_indices()[idx];
+                if let Some(val) = T::from(self.values()[idx]) {
+                    row_values[row_idx].push(val);
+                }
+            }
+        }
+        
+        for (row_idx, mut values) in row_values.into_iter().enumerate() {
+            if values.len() <= n {
+                result[row_idx] = values.into_iter().sum();
+            } else {
+                values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                result[row_idx] = values.into_iter().take(n).sum();
+            }
+        }
+        
         Ok(result)
     }
 }
