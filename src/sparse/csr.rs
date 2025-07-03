@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::iter::Sum;
-use std::ops::{Add, AddAssign};
+use std::ops::AddAssign;
 
 use super::{
     BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance,
@@ -11,9 +10,14 @@ use crate::utils::Normalize;
 use crate::utils::{BatchIdentifier, Log1P};
 use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
-use num_traits::{Float, NumCast, One, PrimInt, Unsigned, Zero};
+use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::slice::ParallelSliceMut;
 use single_utilities::traits::{FloatOpsTS, NumericOps};
 use single_utilities::types::Direction;
+
+const PARALLEL_THRESHOLD: usize = 200_000;
+const CHUNK_SIZE: usize = 512;
 
 impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -21,9 +25,14 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
         T: PrimInt + Unsigned + Zero + AddAssign,
     {
         let mut result = vec![T::zero(); self.ncols()];
-        for &col_index in self.col_indices() {
-            result[col_index] += T::one();
+        let col_indices = self.col_indices();
+
+        for chunk in col_indices.chunks(CHUNK_SIZE) {
+            for &col_index in chunk {
+                result[col_index] += T::one();
+            }
         }
+
         Ok(result)
     }
 
@@ -31,20 +40,95 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
     where
         T: PrimInt + Unsigned + Zero + AddAssign,
     {
-        let data = self
-            .row_offsets()
-            .windows(2)
-            .map(|window| {
-                let diff = window[1]
-                    .checked_sub(window[0])
-                    .ok_or_else(|| anyhow!("Subtraction overflow"))
-                    .expect("Subtraction overflow");
-                T::from(diff)
-                    .ok_or_else(|| anyhow!("Failed to convert to target type"))
-                    .expect("Failed to convert to target type")
-            })
-            .collect();
-        Ok(data)
+        let row_offsets = self.row_offsets();
+        let n_rows = self.nrows();
+
+        // Early return for empty matrix
+        if n_rows == 0 {
+            return Ok(Vec::new());
+        }
+        // Estimate total non-zeros using sampling for larger matrices
+        let estimated_nonzeros = {
+            let sample_size = n_rows.min(100);
+            let sample_sum: usize = (0..sample_size)
+                .map(|i| row_offsets[i + 1] - row_offsets[i])
+                .sum();
+            (sample_sum * n_rows) / sample_size
+        };
+
+        if estimated_nonzeros >= PARALLEL_THRESHOLD {
+            // Parallel implementation
+            let n_cores = rayon::current_num_threads();
+            let chunk_size = (n_rows / (n_cores * 4)).max(1024);
+
+            // Pre-allocate result
+            let mut result = vec![T::zero(); n_rows];
+
+            // Use par_chunks_mut for correct forward iteration
+            result.rchunks_mut(chunk_size).enumerate().try_for_each(
+                |(chunk_idx, chunk)| -> anyhow::Result<()> {
+                    let start_idx = chunk_idx * chunk_size;
+
+                    for (i, item) in chunk.iter_mut().enumerate() {
+                        let row_idx = start_idx + i;
+                        let count = row_offsets[row_idx + 1] - row_offsets[row_idx];
+                        *item = T::from(count).ok_or_else(|| {
+                            anyhow::anyhow!("Count {} exceeds target type capacity", count)
+                        })?;
+                    }
+                    Ok(())
+                },
+            )?;
+
+            Ok(result)
+        } else {
+            // Sequential implementation for medium-sized matrices
+            let mut result = Vec::with_capacity(n_rows);
+
+            let chunks = n_rows / 8;
+            let remainder = n_rows % 8;
+
+            unsafe {
+                let offsets_ptr = row_offsets.as_ptr();
+
+                for chunk_idx in 0..chunks {
+                    let base = chunk_idx * 8;
+
+                    // Prefetch on x86_64
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        use std::arch::x86_64::_mm_prefetch;
+                        if base + 16 < row_offsets.len() {
+                            _mm_prefetch(offsets_ptr.add(base + 16) as *const i8, 1);
+                        }
+                    }
+
+                    for i in 0..8 {
+                        let idx = base + i;
+                        let start = *offsets_ptr.add(idx);
+                        let end = *offsets_ptr.add(idx + 1);
+                        let count = end - start;
+
+                        result.push(T::from(count).ok_or_else(|| {
+                            anyhow::anyhow!("Count {} exceeds target type capacity", count)
+                        })?);
+                    }
+                }
+
+                for i in 0..remainder {
+                    let idx = chunks * 8 + i;
+                    let start = *offsets_ptr.add(idx);
+                    let end = *offsets_ptr.add(idx + 1);
+                    let count = end - start;
+
+                    result.push(T::from(count).ok_or_else(|| {
+                        anyhow::anyhow!("Count {} exceeds target type capacity", count)
+                    })?);
+                }
+            }
+
+            Ok(result)
+        }
     }
 
     fn nonzero_col_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
@@ -115,7 +199,6 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
     where
         T: PrimInt + Unsigned + Zero + AddAssign,
     {
-        // Validate mask length
         if mask.len() < self.ncols() {
             return Err(anyhow::anyhow!(
                 "Mask length ({}) is less than number of columns ({})",
@@ -124,31 +207,131 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
             ));
         }
 
-        let mut result = vec![T::zero(); self.nrows()];
+        let n_rows = self.nrows();
+        let row_offsets = self.row_offsets();
+        let col_indices = self.col_indices();
 
-        // Process each row
-        for row in 0..self.nrows() {
-            let row_start = self.row_offsets()[row];
-            let row_end = self.row_offsets()[row + 1];
-
-            // Count non-zero elements in this row that are in masked-in columns
-            for idx in row_start..row_end {
-                let col = self.col_indices()[idx];
-
-                // Skip this column if masked out
-                if !mask[col] {
-                    continue;
-                }
-
-                result[row] += T::one();
-            }
+        // Early return for empty matrix
+        if n_rows == 0 {
+            return Ok(Vec::new());
         }
 
-        Ok(result)
+        // Quick check: if very few columns are masked in, sequential might be better
+        let masked_in_count = mask.iter().filter(|&&m| m).count();
+        if masked_in_count == 0 {
+            // All columns masked out - return zeros
+            return Ok(vec![T::zero(); n_rows]);
+        }
+
+        let total_nnz = self.nnz();
+
+        if total_nnz < PARALLEL_THRESHOLD || masked_in_count < 10 {
+            let mut result = vec![T::zero(); n_rows];
+
+            // If most columns are masked in, use branch-free counting
+            if masked_in_count > self.ncols() * 3 / 4 {
+                // Branch-free version for mostly-true masks
+                unsafe {
+                    let offsets_ptr = row_offsets.as_ptr();
+                    let indices_ptr = col_indices.as_ptr();
+                    let mask_ptr = mask.as_ptr();
+
+                    for row in 0..n_rows {
+                        let start = *offsets_ptr.add(row);
+                        let end = *offsets_ptr.add(row + 1);
+                        let mut count = T::zero();
+
+                        for idx in start..end {
+                            let col = *indices_ptr.add(idx);
+                            // Branch-free increment: convert bool to 0 or 1
+                            let increment = *mask_ptr.add(col) as usize;
+                            if increment > 0 {
+                                count = count + T::one();
+                            }
+                        }
+
+                        result[row] = count;
+                    }
+                }
+            } else {
+                // Standard version with branching for sparse masks
+                for row in 0..n_rows {
+                    let row_start = row_offsets[row];
+                    let row_end = row_offsets[row + 1];
+                    let mut count = T::zero();
+
+                    // Unroll by 4 for better performance
+                    let chunk_end = row_start + ((row_end - row_start) / 4) * 4;
+
+                    for idx in (row_start..chunk_end).step_by(4) {
+                        // Process 4 elements at a time
+                        if mask[col_indices[idx]] {
+                            count = count + T::one();
+                        }
+                        if mask[col_indices[idx + 1]] {
+                            count = count + T::one();
+                        }
+                        if mask[col_indices[idx + 2]] {
+                            count = count + T::one();
+                        }
+                        if mask[col_indices[idx + 3]] {
+                            count = count + T::one();
+                        }
+                    }
+
+                    // Handle remainder
+                    for idx in chunk_end..row_end {
+                        if mask[col_indices[idx]] {
+                            count = count + T::one();
+                        }
+                    }
+
+                    result[row] = count;
+                }
+            }
+
+            Ok(result)
+        } else {
+            let chunk_size = (n_rows / (rayon::current_num_threads() * 4)).max(1024);
+
+            // Pre-allocate result
+            let mut result = vec![T::zero(); n_rows];
+
+            // Process rows in parallel chunks
+            result
+                .rchunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(chunk_idx, result_chunk)| {
+                    let start_row = chunk_idx * chunk_size;
+
+                    for (i, count) in result_chunk.iter_mut().enumerate() {
+                        let row = start_row + i;
+                        if row >= n_rows {
+                            break;
+                        }
+
+                        let row_start = row_offsets[row];
+                        let row_end = row_offsets[row + 1];
+                        let mut local_count = T::zero();
+
+                        // For better cache locality, process in smaller sub-chunks
+                        for idx in row_start..row_end {
+                            let col = col_indices[idx];
+                            if mask[col] {
+                                local_count += T::one();
+                            }
+                        }
+
+                        *count = local_count;
+                    }
+                });
+
+            Ok(result)
+        }
     }
 }
 
-impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
+impl<M: NumericOps + Send + Sync> MatrixSum for CsrMatrix<M> {
     type Item = M;
 
     fn sum_col<T>(&self) -> anyhow::Result<Vec<T>>
@@ -179,56 +362,135 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
     fn sum_row<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        T: Float + NumCast + AddAssign + std::iter::Sum + Send + Sync,
         Self::Item: NumCast,
     {
         let nrows = self.nrows();
-        let mut result = vec![T::zero(); nrows];
         let values = self.values();
         let row_offsets = self.row_offsets();
 
-        // Process in chunks of 4 rows when possible
-        let chunk_size = 4;
-        let chunks = nrows / chunk_size;
-        let remainder = nrows % chunk_size;
+        if nrows == 0 {
+            return Ok(Vec::new());
+        }
 
-        // Process chunks
-        for chunk in 0..chunks {
-            let base = chunk * chunk_size;
-            let mut sums = [M::zero(); 4];
+        let total_nnz = values.len();
 
-            // Process 4 rows at once to improve instruction-level parallelism
-            (0..chunk_size).enumerate().for_each(|(i, offset)| {
-                let row = base + offset;
-                let start = row_offsets[row];
-                let end = row_offsets[row + 1];
+        if total_nnz >= PARALLEL_THRESHOLD {
+            let sums: Vec<T> = (0..nrows)
+                .into_par_iter()
+                .map(|row| {
+                    let start = row_offsets[row];
+                    let end = row_offsets[row + 1];
 
-                // Direct sum in original type
-                for &val in &values[start..end] {
-                    sums[i] += val;
+                    if end - start > 16 {
+                        let mut sum = M::zero();
+                        let chunk_size = 8;
+                        let chunks = (end - start) / chunk_size;
+                        let remainder = (end - start) % chunk_size;
+
+                        for c in 0..chunks {
+                            let base = start + c * chunk_size;
+                            let mut chunk_sum = M::zero();
+
+                            chunk_sum = chunk_sum + values[base];
+                            chunk_sum = chunk_sum + values[base + 1];
+                            chunk_sum = chunk_sum + values[base + 2];
+                            chunk_sum = chunk_sum + values[base + 3];
+                            chunk_sum = chunk_sum + values[base + 4];
+                            chunk_sum = chunk_sum + values[base + 5];
+                            chunk_sum = chunk_sum + values[base + 6];
+                            chunk_sum = chunk_sum + values[base + 7];
+
+                            sum = sum + chunk_sum;
+                        }
+
+                        for i in 0..remainder {
+                            sum = sum + values[start + chunks * chunk_size + i];
+                        }
+
+                        T::from(sum).unwrap()
+                    } else {
+                        let mut sum = M::zero();
+                        for i in start..end {
+                            sum = sum + values[i];
+                        }
+                        T::from(sum).unwrap()
+                    }
+                })
+                .collect();
+            Ok(sums)
+        } else {
+            let mut result = vec![T::zero(); nrows];
+
+            let chunk_size = 8;
+            let chunks = nrows / chunk_size;
+
+            unsafe {
+                let values_ptr = values.as_ptr();
+                let offsets_ptr = row_offsets.as_ptr();
+                let result_ptr = result.as_mut_ptr();
+
+                for chunk in 0..chunks {
+                    let base = chunk * chunk_size;
+
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        use std::arch::x86_64::_mm_prefetch;
+                        if base + chunk_size < nrows {
+                            let next_start = *offsets_ptr.add(base + chunk_size);
+                            if next_start < values.len() {
+                                _mm_prefetch(values_ptr.add(next_start) as *const i8, 1);
+                            }
+                        }
+                    }
+
+                    let mut sums = [M::zero(); 8];
+
+                    for i in 0..8 {
+                        let row = base + i;
+                        let start = *offsets_ptr.add(row);
+                        let end = *offsets_ptr.add(row + 1);
+
+                        let mut sum = M::zero();
+
+                        let inner_chunks = (end - start) / 4;
+                        let inner_remainder = (end - start) % 4;
+
+                        for j in 0..inner_chunks {
+                            let idx = start + j * 4;
+                            sum = sum + *values_ptr.add(idx);
+                            sum = sum + *values_ptr.add(idx + 1);
+                            sum = sum + *values_ptr.add(idx + 2);
+                            sum = sum + *values_ptr.add(idx + 3);
+                        }
+
+                        for j in 0..inner_remainder {
+                            sum = sum + *values_ptr.add(start + inner_chunks * 4 + j);
+                        }
+
+                        sums[i] = sum;
+                    }
+
+                    for i in 0..8 {
+                        *result_ptr.add(base + i) = T::from(sums[i]).unwrap();
+                    }
                 }
-            });
 
-            // Convert results for the chunk
-            sums.iter().enumerate().for_each(|(i, &sum)| {
-                result[base + i] = T::from(sum).unwrap();
-            });
-        }
+                for row in (chunks * chunk_size)..nrows {
+                    let start = *offsets_ptr.add(row);
+                    let end = *offsets_ptr.add(row + 1);
+                    let mut sum = M::zero();
 
-        // Handle remaining rows
-        let base = chunks * chunk_size;
-        for row in base..nrows {
-            let start = row_offsets[row];
-            let end = row_offsets[row + 1];
-            let mut sum = M::zero();
+                    for idx in start..end {
+                        sum = sum + *values_ptr.add(idx);
+                    }
 
-            for &val in &values[start..end] {
-                sum += val;
+                    *result_ptr.add(row) = T::from(sum).unwrap();
+                }
             }
-            result[row] = T::from(sum).unwrap();
-        }
 
-        Ok(result)
+            Ok(result)
+        }
     }
 
     fn sum_col_chunk<T>(&self, reference: &mut [T]) -> anyhow::Result<()>
@@ -293,9 +555,8 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
 
     fn sum_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
-        T: Float + NumCast + AddAssign + Sum,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
-        // Validate mask length
         if mask.len() < self.ncols() {
             return Err(anyhow::anyhow!(
                 "Mask length ({}) is less than number of columns ({})",
@@ -304,28 +565,117 @@ impl<M: NumericOps> MatrixSum for CsrMatrix<M> {
             ));
         }
 
-        let mut result = vec![T::zero(); self.nrows()];
+        let n_rows = self.nrows();
+        let row_offsets = self.row_offsets();
+        let col_indices = self.col_indices();
+        let values = self.values();
 
-        // Process each row
-        for row in 0..self.nrows() {
-            let row_start = self.row_offsets()[row];
-            let row_end = self.row_offsets()[row + 1];
-
-            // Process all non-zero elements in this row
-            for idx in row_start..row_end {
-                let col = self.col_indices()[idx];
-
-                // Skip this column if masked out
-                if !mask[col] {
-                    continue;
-                }
-
-                let value = T::from(self.values()[idx]).unwrap();
-                result[row] += value;
-            }
+        if n_rows == 0 {
+            return Ok(Vec::new());
         }
 
-        Ok(result)
+        let masked_in_count = mask.iter().filter(|&&m| m).count();
+        if masked_in_count == 0 {
+            return Ok(vec![T::zero(); n_rows]);
+        }
+
+        let total_nnz = self.nnz();
+        const PARALLEL_THRESHOLD: usize = 10000;
+
+        if total_nnz < PARALLEL_THRESHOLD || masked_in_count < 10 {
+            let mut result = vec![T::zero(); n_rows];
+
+            if masked_in_count > self.ncols() * 3 / 4 {
+                unsafe {
+                    let offsets_ptr = row_offsets.as_ptr();
+                    let indices_ptr = col_indices.as_ptr();
+                    let values_ptr = values.as_ptr();
+                    let mask_ptr = mask.as_ptr();
+
+                    for row in 0..n_rows {
+                        let start = *offsets_ptr.add(row);
+                        let end = *offsets_ptr.add(row + 1);
+                        let mut sum = T::zero();
+
+                        for idx in start..end {
+                            let col = *indices_ptr.add(idx);
+                            let increment = *mask_ptr.add(col) as usize;
+                            if increment > 0 {
+                                sum += T::from(*values_ptr.add(idx)).unwrap();
+                            }
+                        }
+
+                        result[row] = sum;
+                    }
+                }
+            } else {
+                for row in 0..n_rows {
+                    let row_start = row_offsets[row];
+                    let row_end = row_offsets[row + 1];
+                    let mut sum = T::zero();
+
+                    let chunk_end = row_start + ((row_end - row_start) / 4) * 4;
+
+                    for idx in (row_start..chunk_end).step_by(4) {
+                        if mask[col_indices[idx]] {
+                            sum += T::from(values[idx]).unwrap();
+                        }
+                        if mask[col_indices[idx + 1]] {
+                            sum += T::from(values[idx + 1]).unwrap();
+                        }
+                        if mask[col_indices[idx + 2]] {
+                            sum += T::from(values[idx + 2]).unwrap();
+                        }
+                        if mask[col_indices[idx + 3]] {
+                            sum += T::from(values[idx + 3]).unwrap();
+                        }
+                    }
+
+                    for idx in chunk_end..row_end {
+                        if mask[col_indices[idx]] {
+                            sum += T::from(values[idx]).unwrap();
+                        }
+                    }
+
+                    result[row] = sum;
+                }
+            }
+
+            Ok(result)
+        } else {
+            let chunk_size = (n_rows / (rayon::current_num_threads() * 4)).max(1024);
+
+            let mut result = vec![T::zero(); n_rows];
+
+            result
+                .par_chunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(chunk_idx, result_chunk)| {
+                    let start_row = chunk_idx * chunk_size;
+
+                    for (i, sum) in result_chunk.iter_mut().enumerate() {
+                        let row = start_row + i;
+                        if row >= n_rows {
+                            break;
+                        }
+
+                        let row_start = row_offsets[row];
+                        let row_end = row_offsets[row + 1];
+                        let mut local_sum = T::zero();
+
+                        for idx in row_start..row_end {
+                            let col = col_indices[idx];
+                            if mask[col] {
+                                local_sum += T::from(values[idx]).unwrap();
+                            }
+                        }
+
+                        *sum = local_sum;
+                    }
+                });
+
+            Ok(result)
+        }
     }
 
     fn sum_col_squared<T>(&self) -> anyhow::Result<Vec<T>>
@@ -367,7 +717,7 @@ where
     fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
         let sum: Vec<T> = self.sum_col()?;
         let squared_sums: Vec<T> = self.sum_col_squared()?;
@@ -392,7 +742,7 @@ where
     fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
         Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
@@ -417,8 +767,8 @@ where
     /// Calculate column-wise variance and store results in the provided slice
     fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
         Self::Item: NumCast,
     {
         let ncols = self.ncols();
@@ -456,8 +806,8 @@ where
 
     fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
         Self::Item: NumCast,
     {
         let nrows = self.nrows();
@@ -504,8 +854,8 @@ where
 
     fn var_col_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
         // Validate mask length
         if mask.len() < self.nrows() {
@@ -553,8 +903,8 @@ where
 
     fn var_row_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
         // Validate mask length
         if mask.len() < self.ncols() {
@@ -606,7 +956,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
 
     fn min_max_col<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps + Send + Sync,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.ncols()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.ncols()];
@@ -617,7 +967,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
 
     fn min_max_row<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps + Send + Sync,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.nrows()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.nrows()];
@@ -628,7 +978,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CsrMatrix<M> 
 
     fn min_max_col_chunk<Item>(&self, reference: (&mut [Item], &mut [Item])) -> anyhow::Result<()>
     where
-        Item: NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps + Send + Sync,
     {
         let (min_vals, max_vals) = reference;
 
@@ -1039,7 +1389,8 @@ impl<M: NumericOps + NumCast> MatrixNTop for CsrMatrix<M> {
 
     fn sum_row_n_top<T>(&self, n: usize) -> anyhow::Result<Vec<T>>
     where
-        T: Float + NumCast + AddAssign + Sum {
+        T: Float + NumCast + AddAssign + Sum,
+    {
         let mut result = vec![T::zero(); self.nrows()];
 
         for row_idx in 0..self.nrows() {

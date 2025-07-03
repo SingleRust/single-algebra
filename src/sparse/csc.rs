@@ -2,9 +2,7 @@ use nalgebra_sparse::CscMatrix;
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 use single_utilities::types::Direction;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
 use std::iter::Sum;
-use std::ops::Add;
 use std::ops::AddAssign;
 
 use crate::sparse::MatrixNTop;
@@ -360,8 +358,8 @@ where
 
     fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + std::iter::Sum + Send + Sync,
         Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_col()?;
@@ -386,8 +384,8 @@ where
 
     fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + std::iter::Sum + Send + Sync,
         Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
@@ -411,8 +409,8 @@ where
 
     fn var_col_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + std::iter::Sum + Send + Sync,
         Self::Item: NumCast,
     {
         // Validate input slice length matches number of columns
@@ -450,8 +448,8 @@ where
 
     fn var_row_chunk<I, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + std::iter::Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + std::iter::Sum + Send + Sync,
         Self::Item: NumCast,
     {
         // Validate input slice length matches number of rows
@@ -489,8 +487,8 @@ where
 
     fn var_col_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
         // Validate mask length
         if mask.len() < self.nrows() {
@@ -538,8 +536,8 @@ where
 
     fn var_row_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
-        T: Float + NumCast + AddAssign + Sum,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync
     {
         // Validate mask length
         if mask.len() < self.ncols() {
@@ -591,7 +589,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
     fn min_max_col<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps + Send + Sync,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.ncols()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.ncols()];
@@ -602,7 +600,7 @@ impl<M: NumCast + Copy + PartialOrd + NumericOps> MatrixMinMax for CscMatrix<M> 
 
     fn min_max_row<Item>(&self) -> anyhow::Result<(Vec<Item>, Vec<Item>)>
     where
-        Item: NumCast + Copy + PartialOrd + NumericOps,
+        Item: NumCast + Copy + PartialOrd + NumericOps + Send + Sync,
     {
         let mut min: Vec<Item> = vec![Item::max_value(); self.nrows()];
         let mut max: Vec<Item> = vec![Item::min_value(); self.nrows()];

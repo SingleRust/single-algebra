@@ -1729,7 +1729,7 @@ dependencies = [
  "rand 0.9.0",
  "rand_distr 0.5.1",
  "rayon",
- "single-utilities",
+ "single-utilities 0.6.0",
  "thiserror 2.0.9",
 ]
 
@@ -1743,8 +1743,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "single-utilities"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd8b90e8aa6128de9b26903484c2cee7556cf342b190ea3570396e293d1991de"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "single_algebra"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "approx",
@@ -1761,7 +1770,7 @@ dependencies = [
  "rayon",
  "simba",
  "single-svdlib",
- "single-utilities",
+ "single-utilities 0.7.0",
  "smartcore",
 ]
 
