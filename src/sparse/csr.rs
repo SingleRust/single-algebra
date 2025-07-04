@@ -13,7 +13,7 @@ use anyhow::{anyhow, Ok};
 use nalgebra_sparse::CsrMatrix;
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use rayon::slice::ParallelSliceMut;
+use rayon::slice::ParallelSlice;
 use single_utilities::traits::{FloatOpsTS, NumericOps};
 use single_utilities::types::Direction;
 
@@ -29,220 +29,96 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
         let col_indices = self.col_indices();
         let total_nnz = col_indices.len();
 
+        // Early return for empty matrix
         if total_nnz == 0 || n_cols == 0 {
             return Ok(vec![T::zero(); n_cols]);
         }
 
+        if let Some(&max_col) = col_indices.iter().max() {
+            if max_col >= n_cols {
+                return Err(anyhow::anyhow!(
+                    "Invalid column index {} exceeds matrix column count {}",
+                    max_col,
+                    n_cols
+                ));
+            }
+        }
+
         if total_nnz < PARALLEL_THRESHOLD {
+            // Sequential implementation
             let mut result = vec![T::zero(); n_cols];
 
-            for chunk_start in (0..total_nnz).step_by(CHUNK_SIZE) {
-                let chunk_end = (chunk_start + CHUNK_SIZE).min(total_nnz);
-
-                #[cfg(target_arch = "x86_64")]
-                {
-                    use std::arch::x86_64::_mm_prefetch;
-                    if chunk_end < total_nnz {
-                        unsafe {
-                            let next_start = chunk_end;
-                            let prefetch_end = (next_start + 64).min(total_nnz);
-                            for i in (next_start..prefetch_end).step_by(8) {
-                                _mm_prefetch(col_indices.as_ptr().add(i) as *const i8, 1);
-                            }
-                        }
-                    }
-                }
-
-                let unroll_end = chunk_start + ((chunk_end - chunk_start) / 8) * 8;
-
-                unsafe {
-                    let col_ptr = col_indices.as_ptr().add(chunk_start);
-                    let result_ptr = result.as_mut_ptr();
-
-                    for i in (0..(unroll_end - chunk_start)).step_by(8) {
-                        let col0 = *col_ptr.add(i);
-                        let col1 = *col_ptr.add(i + 1);
-                        let col2 = *col_ptr.add(i + 2);
-                        let col3 = *col_ptr.add(i + 3);
-                        let col4 = *col_ptr.add(i + 4);
-                        let col5 = *col_ptr.add(i + 5);
-                        let col6 = *col_ptr.add(i + 6);
-                        let col7 = *col_ptr.add(i + 7);
-
-                        *result_ptr.add(col0) = *result_ptr.add(col0) + T::one();
-                        *result_ptr.add(col1) = *result_ptr.add(col1) + T::one();
-                        *result_ptr.add(col2) = *result_ptr.add(col2) + T::one();
-                        *result_ptr.add(col3) = *result_ptr.add(col3) + T::one();
-                        *result_ptr.add(col4) = *result_ptr.add(col4) + T::one();
-                        *result_ptr.add(col5) = *result_ptr.add(col5) + T::one();
-                        *result_ptr.add(col6) = *result_ptr.add(col6) + T::one();
-                        *result_ptr.add(col7) = *result_ptr.add(col7) + T::one();
-                    }
-                }
-
-                for idx in unroll_end..chunk_end {
-                    result[col_indices[idx]] += T::one();
-                }
+            for &col_idx in col_indices {
+                result[col_idx] += T::one();
             }
 
             Ok(result)
         } else {
-            let n_threads = rayon::current_num_threads();
-
-            let thread_results: Vec<Mutex<Vec<T>>> = (0..n_threads)
-                .map(|_| Mutex::new(vec![T::zero(); n_cols]))
-                .collect();
-
-            let chunk_size = (total_nnz / (n_threads * 8)).max(8192);
-
-            (0..total_nnz)
-                .into_par_iter()
-                .chunks(chunk_size)
-                .enumerate()
-                .for_each(|(thread_id, chunk)| {
-                    let thread_id = thread_id % n_threads;
-                    let mut local_result = vec![T::zero(); n_cols];
-
-                    for idx_group in chunk.chunks(4) {
-                        match idx_group.len() {
-                            4 => unsafe {
-                                let idx0 = idx_group[0];
-                                let idx1 = idx_group[1];
-                                let idx2 = idx_group[2];
-                                let idx3 = idx_group[3];
-
-                                if idx3 < total_nnz {
-                                    let col0 = *col_indices.get_unchecked(idx0);
-                                    let col1 = *col_indices.get_unchecked(idx1);
-                                    let col2 = *col_indices.get_unchecked(idx2);
-                                    let col3 = *col_indices.get_unchecked(idx3);
-
-                                    *local_result.get_unchecked_mut(col0) += T::one();
-                                    *local_result.get_unchecked_mut(col1) += T::one();
-                                    *local_result.get_unchecked_mut(col2) += T::one();
-                                    *local_result.get_unchecked_mut(col3) += T::one();
-                                }
-                            },
-                            _ => {
-                                for &idx in idx_group {
-                                    if idx < total_nnz {
-                                        local_result[col_indices[idx]] += T::one();
-                                    }
-                                }
-                            }
+            let result = col_indices
+                .par_chunks(8192)
+                .map(|chunk| {
+                    let mut local_counts = vec![T::zero(); n_cols];
+                    for &col_idx in chunk {
+                        local_counts[col_idx] += T::one();
+                    }
+                    local_counts
+                })
+                .reduce(
+                    || vec![T::zero(); n_cols],
+                    |mut acc, local| {
+                        for (i, count) in local.into_iter().enumerate() {
+                            acc[i] += count;
                         }
-                    }
+                        acc
+                    },
+                );
 
-                    let mut thread_result = thread_results[thread_id].lock().unwrap();
-                    for col in 0..n_cols {
-                        thread_result[col] += local_result[col];
-                    }
-                });
-
-            let mut final_result = vec![T::zero(); n_cols];
-            for thread_result in thread_results {
-                let result = thread_result.into_inner().unwrap();
-                for col in 0..n_cols {
-                    final_result[col] += result[col];
-                }
-            }
-
-            Ok(final_result)
+            Ok(result)
         }
     }
 
     fn nonzero_row<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: PrimInt + Unsigned + Zero + AddAssign,
+        T: PrimInt + Unsigned + Zero + AddAssign + Send + Sync,
     {
         let row_offsets = self.row_offsets();
         let n_rows = self.nrows();
 
-        // Early return for empty matrix
         if n_rows == 0 {
             return Ok(Vec::new());
         }
-        // Estimate total non-zeros using sampling for larger matrices
-        let estimated_nonzeros = {
-            let sample_size = n_rows.min(100);
-            let sample_sum: usize = (0..sample_size)
-                .map(|i| row_offsets[i + 1] - row_offsets[i])
-                .sum();
-            (sample_sum * n_rows) / sample_size
-        };
 
-        if estimated_nonzeros >= PARALLEL_THRESHOLD {
-            // Parallel implementation
-            let n_cores = rayon::current_num_threads();
-            let chunk_size = (n_rows / (n_cores * 4)).max(1024);
+        if row_offsets.len() != n_rows + 1 {
+            return Err(anyhow::anyhow!(
+                "Invalid row offsets: expected {} elements, got {}",
+                n_rows + 1,
+                row_offsets.len()
+            ));
+        }
 
-            // Pre-allocate result
-            let mut result = vec![T::zero(); n_rows];
-
-            // Use par_chunks_mut for correct forward iteration
-            result.rchunks_mut(chunk_size).enumerate().try_for_each(
-                |(chunk_idx, chunk)| -> anyhow::Result<()> {
-                    let start_idx = chunk_idx * chunk_size;
-
-                    for (i, item) in chunk.iter_mut().enumerate() {
-                        let row_idx = start_idx + i;
-                        let count = row_offsets[row_idx + 1] - row_offsets[row_idx];
-                        *item = T::from(count).ok_or_else(|| {
-                            anyhow::anyhow!("Count {} exceeds target type capacity", count)
-                        })?;
-                    }
-                    Ok(())
-                },
-            )?;
-
-            Ok(result)
-        } else {
-            // Sequential implementation for medium-sized matrices
+        if n_rows < PARALLEL_THRESHOLD {
             let mut result = Vec::with_capacity(n_rows);
 
-            let chunks = n_rows / 8;
-            let remainder = n_rows % 8;
-
-            unsafe {
-                let offsets_ptr = row_offsets.as_ptr();
-
-                for chunk_idx in 0..chunks {
-                    let base = chunk_idx * 8;
-
-                    // Prefetch on x86_64
-                    #[cfg(target_arch = "x86_64")]
-                    {
-                        use std::arch::x86_64::_mm_prefetch;
-                        if base + 16 < row_offsets.len() {
-                            _mm_prefetch(offsets_ptr.add(base + 16) as *const i8, 1);
-                        }
-                    }
-
-                    for i in 0..8 {
-                        let idx = base + i;
-                        let start = *offsets_ptr.add(idx);
-                        let end = *offsets_ptr.add(idx + 1);
-                        let count = end - start;
-
-                        result.push(T::from(count).ok_or_else(|| {
-                            anyhow::anyhow!("Count {} exceeds target type capacity", count)
-                        })?);
-                    }
-                }
-
-                for i in 0..remainder {
-                    let idx = chunks * 8 + i;
-                    let start = *offsets_ptr.add(idx);
-                    let end = *offsets_ptr.add(idx + 1);
-                    let count = end - start;
-
-                    result.push(T::from(count).ok_or_else(|| {
-                        anyhow::anyhow!("Count {} exceeds target type capacity", count)
-                    })?);
-                }
+            for row in 0..n_rows {
+                let count = row_offsets[row + 1] - row_offsets[row];
+                result.push(T::from(count).ok_or_else(|| {
+                    anyhow::anyhow!("Count {} exceeds target type capacity", count)
+                })?);
             }
 
             Ok(result)
+        } else {
+            let result: Result<Vec<T>, anyhow::Error> = (0..n_rows)
+                .into_par_iter()
+                .map(|row| {
+                    let count = row_offsets[row + 1] - row_offsets[row];
+                    T::from(count).ok_or_else(|| {
+                        anyhow::anyhow!("Count {} exceeds target type capacity", count)
+                    })
+                })
+                .collect();
+
+            result
         }
     }
 
@@ -312,7 +188,7 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
 
     fn nonzero_row_masked<T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
-        T: PrimInt + Unsigned + Zero + AddAssign,
+        T: PrimInt + Unsigned + Zero + AddAssign + Send + Sync,
     {
         if mask.len() < self.ncols() {
             return Err(anyhow::anyhow!(
@@ -326,122 +202,54 @@ impl<M: NumericOps> MatrixNonZero for CsrMatrix<M> {
         let row_offsets = self.row_offsets();
         let col_indices = self.col_indices();
 
-        // Early return for empty matrix
         if n_rows == 0 {
             return Ok(Vec::new());
         }
 
-        // Quick check: if very few columns are masked in, sequential might be better
-        let masked_in_count = mask.iter().filter(|&&m| m).count();
-        if masked_in_count == 0 {
-            // All columns masked out - return zeros
+        let masked_count = mask.iter().filter(|&&m| m).count();
+        if masked_count == 0 {
             return Ok(vec![T::zero(); n_rows]);
         }
 
         let total_nnz = self.nnz();
 
-        if total_nnz < PARALLEL_THRESHOLD || masked_in_count < 10 {
-            let mut result = vec![T::zero(); n_rows];
+        if total_nnz < PARALLEL_THRESHOLD {
+            let mut result = Vec::with_capacity(n_rows);
 
-            // If most columns are masked in, use branch-free counting
-            if masked_in_count > self.ncols() * 3 / 4 {
-                // Branch-free version for mostly-true masks
-                unsafe {
-                    let offsets_ptr = row_offsets.as_ptr();
-                    let indices_ptr = col_indices.as_ptr();
-                    let mask_ptr = mask.as_ptr();
+            for row in 0..n_rows {
+                let start = row_offsets[row];
+                let end = row_offsets[row + 1];
+                let mut count = T::zero();
 
-                    for row in 0..n_rows {
-                        let start = *offsets_ptr.add(row);
-                        let end = *offsets_ptr.add(row + 1);
-                        let mut count = T::zero();
-
-                        for idx in start..end {
-                            let col = *indices_ptr.add(idx);
-                            // Branch-free increment: convert bool to 0 or 1
-                            let increment = *mask_ptr.add(col) as usize;
-                            if increment > 0 {
-                                count = count + T::one();
-                            }
-                        }
-
-                        result[row] = count;
+                for idx in start..end {
+                    if mask[col_indices[idx]] {
+                        count += T::one();
                     }
                 }
-            } else {
-                // Standard version with branching for sparse masks
-                for row in 0..n_rows {
-                    let row_start = row_offsets[row];
-                    let row_end = row_offsets[row + 1];
-                    let mut count = T::zero();
 
-                    // Unroll by 4 for better performance
-                    let chunk_end = row_start + ((row_end - row_start) / 4) * 4;
-
-                    for idx in (row_start..chunk_end).step_by(4) {
-                        // Process 4 elements at a time
-                        if mask[col_indices[idx]] {
-                            count = count + T::one();
-                        }
-                        if mask[col_indices[idx + 1]] {
-                            count = count + T::one();
-                        }
-                        if mask[col_indices[idx + 2]] {
-                            count = count + T::one();
-                        }
-                        if mask[col_indices[idx + 3]] {
-                            count = count + T::one();
-                        }
-                    }
-
-                    // Handle remainder
-                    for idx in chunk_end..row_end {
-                        if mask[col_indices[idx]] {
-                            count = count + T::one();
-                        }
-                    }
-
-                    result[row] = count;
-                }
+                result.push(count);
             }
 
             Ok(result)
         } else {
-            let chunk_size = (n_rows / (rayon::current_num_threads() * 4)).max(1024);
+            let counts: Vec<T> = (0..n_rows)
+                .into_par_iter()
+                .map(|row| {
+                    let start = row_offsets[row];
+                    let end = row_offsets[row + 1];
+                    let mut count = T::zero();
 
-            // Pre-allocate result
-            let mut result = vec![T::zero(); n_rows];
-
-            // Process rows in parallel chunks
-            result
-                .rchunks_mut(chunk_size)
-                .enumerate()
-                .for_each(|(chunk_idx, result_chunk)| {
-                    let start_row = chunk_idx * chunk_size;
-
-                    for (i, count) in result_chunk.iter_mut().enumerate() {
-                        let row = start_row + i;
-                        if row >= n_rows {
-                            break;
+                    for idx in start..end {
+                        if mask[col_indices[idx]] {
+                            count += T::one();
                         }
-
-                        let row_start = row_offsets[row];
-                        let row_end = row_offsets[row + 1];
-                        let mut local_count = T::zero();
-
-                        // For better cache locality, process in smaller sub-chunks
-                        for idx in row_start..row_end {
-                            let col = col_indices[idx];
-                            if mask[col] {
-                                local_count += T::one();
-                            }
-                        }
-
-                        *count = local_count;
                     }
-                });
 
-            Ok(result)
+                    count
+                })
+                .collect();
+
+            Ok(counts)
         }
     }
 }
@@ -466,136 +274,41 @@ impl<M: NumericOps + Send + Sync> MatrixSum for CsrMatrix<M> {
         if total_nnz < PARALLEL_THRESHOLD {
             let mut result = vec![T::zero(); n_cols];
 
-            const CHUNK_SIZE: usize = 512;
-
             for chunk_start in (0..total_nnz).step_by(CHUNK_SIZE) {
                 let chunk_end = (chunk_start + CHUNK_SIZE).min(total_nnz);
 
-                #[cfg(target_arch = "x86_64")]
-                {
-                    use std::arch::x86_64::_mm_prefetch;
-                    if chunk_end < total_nnz {
-                        unsafe {
-                            let next_start = chunk_end;
-                            let prefetch_end = (next_start + 64).min(total_nnz);
-                            for i in (next_start..prefetch_end).step_by(8) {
-                                _mm_prefetch(col_indices.as_ptr().add(i) as *const i8, 1);
-                                _mm_prefetch(values.as_ptr().add(i) as *const i8, 1);
-                            }
-                        }
-                    }
-                }
-
-                let unroll_end = chunk_start + ((chunk_end - chunk_start) / 8) * 8;
-
-                unsafe {
-                    let col_ptr = col_indices.as_ptr().add(chunk_start);
-                    let val_ptr = values.as_ptr().add(chunk_start);
-                    let result_ptr = result.as_mut_ptr();
-
-                    for i in (0..(unroll_end - chunk_start)).step_by(8) {
-                        let col0 = *col_ptr.add(i);
-                        let col1 = *col_ptr.add(i + 1);
-                        let col2 = *col_ptr.add(i + 2);
-                        let col3 = *col_ptr.add(i + 3);
-                        let col4 = *col_ptr.add(i + 4);
-                        let col5 = *col_ptr.add(i + 5);
-                        let col6 = *col_ptr.add(i + 6);
-                        let col7 = *col_ptr.add(i + 7);
-
-                        let val0 = T::from(*val_ptr.add(i)).unwrap();
-                        let val1 = T::from(*val_ptr.add(i + 1)).unwrap();
-                        let val2 = T::from(*val_ptr.add(i + 2)).unwrap();
-                        let val3 = T::from(*val_ptr.add(i + 3)).unwrap();
-                        let val4 = T::from(*val_ptr.add(i + 4)).unwrap();
-                        let val5 = T::from(*val_ptr.add(i + 5)).unwrap();
-                        let val6 = T::from(*val_ptr.add(i + 6)).unwrap();
-                        let val7 = T::from(*val_ptr.add(i + 7)).unwrap();
-
-                        *result_ptr.add(col0) = *result_ptr.add(col0) + val0;
-                        *result_ptr.add(col1) = *result_ptr.add(col1) + val1;
-                        *result_ptr.add(col2) = *result_ptr.add(col2) + val2;
-                        *result_ptr.add(col3) = *result_ptr.add(col3) + val3;
-                        *result_ptr.add(col4) = *result_ptr.add(col4) + val4;
-                        *result_ptr.add(col5) = *result_ptr.add(col5) + val5;
-                        *result_ptr.add(col6) = *result_ptr.add(col6) + val6;
-                        *result_ptr.add(col7) = *result_ptr.add(col7) + val7;
-                    }
-                }
-
-                for idx in unroll_end..chunk_end {
+                for idx in chunk_start..chunk_end {
                     result[col_indices[idx]] += T::from(values[idx]).unwrap();
                 }
             }
 
             Ok(result)
         } else {
-            let n_threads = rayon::current_num_threads();
-
-            let thread_results: Vec<Mutex<Vec<T>>> = (0..n_threads)
-                .map(|_| Mutex::new(vec![T::zero(); n_cols]))
-                .collect();
-
-            let chunk_size = (total_nnz / (n_threads * 8)).max(8192);
-
-            (0..total_nnz)
+            let result = (0..total_nnz)
                 .into_par_iter()
-                .chunks(chunk_size)
-                .enumerate()
-                .for_each(|(thread_id, chunk)| {
-                    let thread_id = thread_id % n_threads;
-                    let mut local_result = vec![T::zero(); n_cols];
+                .chunks(8192)
+                .map(|chunk_indices| {
+                    let mut local_sums = vec![T::zero(); n_cols];
 
-                    for idx in chunk {
-                        if idx >= total_nnz {
-                            break;
-                        }
-
-                        if idx + 3 < total_nnz {
-                            let remaining = total_nnz - idx;
-                            if remaining >= 4 {
-                                unsafe {
-                                    let col0 = *col_indices.get_unchecked(idx);
-                                    let col1 = *col_indices.get_unchecked(idx + 1);
-                                    let col2 = *col_indices.get_unchecked(idx + 2);
-                                    let col3 = *col_indices.get_unchecked(idx + 3);
-
-                                    let val0 = T::from(*values.get_unchecked(idx)).unwrap();
-                                    let val1 = T::from(*values.get_unchecked(idx + 1)).unwrap();
-                                    let val2 = T::from(*values.get_unchecked(idx + 2)).unwrap();
-                                    let val3 = T::from(*values.get_unchecked(idx + 3)).unwrap();
-
-                                    *local_result.get_unchecked_mut(col0) += val0;
-                                    *local_result.get_unchecked_mut(col1) += val1;
-                                    *local_result.get_unchecked_mut(col2) += val2;
-                                    *local_result.get_unchecked_mut(col3) += val3;
-                                }
-                            } else {
-                                for i in 0..remaining {
-                                    local_result[col_indices[idx + i]] +=
-                                        T::from(values[idx + i]).unwrap();
-                                }
-                            }
-                        } else {
-                            local_result[col_indices[idx]] += T::from(values[idx]).unwrap();
+                    for idx in chunk_indices {
+                        if idx < total_nnz {
+                            local_sums[col_indices[idx]] += T::from(values[idx]).unwrap();
                         }
                     }
 
-                    let mut thread_result = thread_results[thread_id].lock().unwrap();
-                    for (col, value) in local_result.into_iter().enumerate() {
-                        thread_result[col] += value;
-                    }
-                });
+                    local_sums
+                })
+                .reduce(
+                    || vec![T::zero(); n_cols],
+                    |mut acc, local| {
+                        for (i, val) in local.into_iter().enumerate() {
+                            acc[i] += val;
+                        }
+                        acc
+                    },
+                );
 
-            let mut final_result = vec![T::zero(); n_cols];
-            for thread_result in thread_results {
-                let result = thread_result.into_inner().unwrap();
-                for (col, value) in result.into_iter().enumerate() {
-                    final_result[col] += value;
-                }
-            }
-
-            Ok(final_result)
+            Ok(result)
         }
     }
 
@@ -614,121 +327,68 @@ impl<M: NumericOps + Send + Sync> MatrixSum for CsrMatrix<M> {
 
         let total_nnz = values.len();
 
-        if total_nnz >= PARALLEL_THRESHOLD {
+        if total_nnz < PARALLEL_THRESHOLD {
+            let mut result = Vec::with_capacity(nrows);
+
+            const ROW_CHUNK: usize = 64;
+
+            for row_chunk in (0..nrows).step_by(ROW_CHUNK) {
+                let chunk_end = (row_chunk + ROW_CHUNK).min(nrows);
+
+                for row in row_chunk..chunk_end {
+                    let start = row_offsets[row];
+                    let end = row_offsets[row + 1];
+                    let row_values = &values[start..end];
+                    let sum = if row_values.len() < 16 {
+                        row_values.iter().map(|&v| T::from(v).unwrap()).sum::<T>()
+                    } else {
+                        let mut sum = T::zero();
+                        let chunks = row_values.chunks_exact(4);
+                        let remainder = chunks.remainder();
+
+                        for chunk in chunks {
+                            sum += T::from(chunk[0]).unwrap();
+                            sum += T::from(chunk[1]).unwrap();
+                            sum += T::from(chunk[2]).unwrap();
+                            sum += T::from(chunk[3]).unwrap();
+                        }
+
+                        for &val in remainder {
+                            sum += T::from(val).unwrap();
+                        }
+
+                        sum
+                    };
+
+                    result.push(sum);
+                }
+            }
+
+            Ok(result)
+        } else {
             let sums: Vec<T> = (0..nrows)
                 .into_par_iter()
                 .map(|row| {
                     let start = row_offsets[row];
                     let end = row_offsets[row + 1];
+                    let row_values = &values[start..end];
 
-                    if end - start > 16 {
-                        let mut sum = M::zero();
-                        let chunk_size = 8;
-                        let chunks = (end - start) / chunk_size;
-                        let remainder = (end - start) % chunk_size;
-
-                        for c in 0..chunks {
-                            let base = start + c * chunk_size;
-                            let mut chunk_sum = M::zero();
-
-                            chunk_sum = chunk_sum + values[base];
-                            chunk_sum = chunk_sum + values[base + 1];
-                            chunk_sum = chunk_sum + values[base + 2];
-                            chunk_sum = chunk_sum + values[base + 3];
-                            chunk_sum = chunk_sum + values[base + 4];
-                            chunk_sum = chunk_sum + values[base + 5];
-                            chunk_sum = chunk_sum + values[base + 6];
-                            chunk_sum = chunk_sum + values[base + 7];
-
-                            sum = sum + chunk_sum;
-                        }
-
-                        for i in 0..remainder {
-                            sum = sum + values[start + chunks * chunk_size + i];
-                        }
-
-                        T::from(sum).unwrap()
+                    if row_values.len() < 32 {
+                        row_values.iter().map(|&v| T::from(v).unwrap()).sum::<T>()
                     } else {
-                        let mut sum = M::zero();
-                        for i in start..end {
-                            sum = sum + values[i];
+                        let mut sum = T::zero();
+
+                        for chunk in row_values.chunks(8) {
+                            let chunk_sum: T = chunk.iter().map(|&v| T::from(v).unwrap()).sum();
+                            sum += chunk_sum;
                         }
-                        T::from(sum).unwrap()
+
+                        sum
                     }
                 })
                 .collect();
+
             Ok(sums)
-        } else {
-            let mut result = vec![T::zero(); nrows];
-
-            let chunk_size = 8;
-            let chunks = nrows / chunk_size;
-
-            unsafe {
-                let values_ptr = values.as_ptr();
-                let offsets_ptr = row_offsets.as_ptr();
-                let result_ptr = result.as_mut_ptr();
-
-                for chunk in 0..chunks {
-                    let base = chunk * chunk_size;
-
-                    #[cfg(target_arch = "x86_64")]
-                    {
-                        use std::arch::x86_64::_mm_prefetch;
-                        if base + chunk_size < nrows {
-                            let next_start = *offsets_ptr.add(base + chunk_size);
-                            if next_start < values.len() {
-                                _mm_prefetch(values_ptr.add(next_start) as *const i8, 1);
-                            }
-                        }
-                    }
-
-                    let mut sums = [M::zero(); 8];
-
-                    for i in 0..8 {
-                        let row = base + i;
-                        let start = *offsets_ptr.add(row);
-                        let end = *offsets_ptr.add(row + 1);
-
-                        let mut sum = M::zero();
-
-                        let inner_chunks = (end - start) / 4;
-                        let inner_remainder = (end - start) % 4;
-
-                        for j in 0..inner_chunks {
-                            let idx = start + j * 4;
-                            sum = sum + *values_ptr.add(idx);
-                            sum = sum + *values_ptr.add(idx + 1);
-                            sum = sum + *values_ptr.add(idx + 2);
-                            sum = sum + *values_ptr.add(idx + 3);
-                        }
-
-                        for j in 0..inner_remainder {
-                            sum = sum + *values_ptr.add(start + inner_chunks * 4 + j);
-                        }
-
-                        sums[i] = sum;
-                    }
-
-                    for i in 0..8 {
-                        *result_ptr.add(base + i) = T::from(sums[i]).unwrap();
-                    }
-                }
-
-                for row in (chunks * chunk_size)..nrows {
-                    let start = *offsets_ptr.add(row);
-                    let end = *offsets_ptr.add(row + 1);
-                    let mut sum = M::zero();
-
-                    for idx in start..end {
-                        sum = sum + *values_ptr.add(idx);
-                    }
-
-                    *result_ptr.add(row) = T::from(sum).unwrap();
-                }
-            }
-
-            Ok(result)
         }
     }
 
@@ -768,105 +428,26 @@ impl<M: NumericOps + Send + Sync> MatrixSum for CsrMatrix<M> {
             ));
         }
 
-        let n_rows = self.nrows();
         let n_cols = self.ncols();
         let row_offsets = self.row_offsets();
         let col_indices = self.col_indices();
         let values = self.values();
 
-        if n_rows == 0 || n_cols == 0 {
+        let masked_count = mask.iter().filter(|&&m| m).count();
+
+        if masked_count == 0 {
             return Ok(vec![T::zero(); n_cols]);
         }
 
-        let masked_in_count = mask.iter().filter(|&&m| m).count();
-        if masked_in_count == 0 {
-            return Ok(vec![T::zero(); n_cols]);
-        }
-
-        let estimated_work = if masked_in_count > n_rows / 2 {
-            self.nnz()
-        } else {
-            let sample_size = masked_in_count.min(10);
-            let mut work_estimate = 0;
-            let mut sampled = 0;
-            for (row, &is_masked) in mask.iter().enumerate().take(n_rows.min(100)) {
-                if is_masked && sampled < sample_size {
-                    work_estimate += row_offsets[row + 1] - row_offsets[row];
-                    sampled += 1;
-                }
-            }
-            (work_estimate * masked_in_count) / sample_size.max(1)
-        };
-
-        const PARALLEL_THRESHOLD: usize = 50000;
-
-        if estimated_work < PARALLEL_THRESHOLD || masked_in_count < 100 {
+        if masked_count < PARALLEL_THRESHOLD {
             let mut result = vec![T::zero(); n_cols];
 
-            if masked_in_count > n_rows * 3 / 4 {
-                unsafe {
-                    let offsets_ptr = row_offsets.as_ptr();
-                    let indices_ptr = col_indices.as_ptr();
-                    let values_ptr = values.as_ptr();
-                    let mask_ptr = mask.as_ptr();
-                    let result_ptr = result.as_mut_ptr();
+            for (row, &is_included) in mask.iter().enumerate() {
+                if is_included {
+                    let start = row_offsets[row];
+                    let end = row_offsets[row + 1];
 
-                    for row in 0..n_rows {
-                        let is_included = *mask_ptr.add(row) as usize;
-                        if is_included > 0 {
-                            let start = *offsets_ptr.add(row);
-                            let end = *offsets_ptr.add(row + 1);
-
-                            let chunk_end = start + ((end - start) / 4) * 4;
-
-                            for idx in (start..chunk_end).step_by(4) {
-                                let col0 = *indices_ptr.add(idx);
-                                let col1 = *indices_ptr.add(idx + 1);
-                                let col2 = *indices_ptr.add(idx + 2);
-                                let col3 = *indices_ptr.add(idx + 3);
-
-                                let val0 = T::from(*values_ptr.add(idx)).unwrap();
-                                let val1 = T::from(*values_ptr.add(idx + 1)).unwrap();
-                                let val2 = T::from(*values_ptr.add(idx + 2)).unwrap();
-                                let val3 = T::from(*values_ptr.add(idx + 3)).unwrap();
-
-                                *result_ptr.add(col0) = *result_ptr.add(col0) + val0;
-                                *result_ptr.add(col1) = *result_ptr.add(col1) + val1;
-                                *result_ptr.add(col2) = *result_ptr.add(col2) + val2;
-                                *result_ptr.add(col3) = *result_ptr.add(col3) + val3;
-                            }
-
-                            for idx in chunk_end..end {
-                                let col = *indices_ptr.add(idx);
-                                let val = T::from(*values_ptr.add(idx)).unwrap();
-                                *result_ptr.add(col) = *result_ptr.add(col) + val;
-                            }
-                        }
-                    }
-                }
-            } else {
-                for (row, &is_included) in mask.iter().enumerate().take(n_rows) {
-                    if !is_included {
-                        continue;
-                    }
-
-                    let row_start = row_offsets[row];
-                    let row_end = row_offsets[row + 1];
-
-                    if row_start == row_end {
-                        continue;
-                    }
-
-                    let chunk_end = row_start + ((row_end - row_start) / 4) * 4;
-
-                    for idx in (row_start..chunk_end).step_by(4) {
-                        result[col_indices[idx]] += T::from(values[idx]).unwrap();
-                        result[col_indices[idx + 1]] += T::from(values[idx + 1]).unwrap();
-                        result[col_indices[idx + 2]] += T::from(values[idx + 2]).unwrap();
-                        result[col_indices[idx + 3]] += T::from(values[idx + 3]).unwrap();
-                    }
-
-                    for idx in chunk_end..row_end {
+                    for idx in start..end {
                         result[col_indices[idx]] += T::from(values[idx]).unwrap();
                     }
                 }
@@ -874,58 +455,36 @@ impl<M: NumericOps + Send + Sync> MatrixSum for CsrMatrix<M> {
 
             Ok(result)
         } else {
-            let n_threads = rayon::current_num_threads();
-            let thread_results: Vec<Mutex<Vec<T>>> = (0..n_threads)
-                .map(|_| Mutex::new(vec![T::zero(); n_cols]))
-                .collect();
-
-            let chunk_size = (n_rows / (n_threads * 4)).max(256);
-
-            (0..n_rows)
+            let result = (0..mask.len())
                 .into_par_iter()
-                .chunks(chunk_size)
-                .enumerate()
-                .for_each(|(thread_id, chunk)| {
-                    let thread_id = thread_id % n_threads;
-                    let mut local_result = vec![T::zero(); n_cols];
+                .chunks(256)
+                .map(|row_chunk| {
+                    let mut local_sums = vec![T::zero(); n_cols];
 
-                    for row in chunk {
-                        if row >= n_rows || !mask[row] {
-                            continue;
-                        }
+                    for row in row_chunk {
+                        if mask[row] {
+                            let start = row_offsets[row];
+                            let end = row_offsets[row + 1];
 
-                        let row_start = row_offsets[row];
-                        let row_end = row_offsets[row + 1];
-
-                        let chunk_end = row_start + ((row_end - row_start) / 4) * 4;
-
-                        for idx in (row_start..chunk_end).step_by(4) {
-                            local_result[col_indices[idx]] += T::from(values[idx]).unwrap();
-                            local_result[col_indices[idx + 1]] += T::from(values[idx + 1]).unwrap();
-                            local_result[col_indices[idx + 2]] += T::from(values[idx + 2]).unwrap();
-                            local_result[col_indices[idx + 3]] += T::from(values[idx + 3]).unwrap();
-                        }
-
-                        for idx in chunk_end..row_end {
-                            local_result[col_indices[idx]] += T::from(values[idx]).unwrap();
+                            for idx in start..end {
+                                local_sums[col_indices[idx]] += T::from(values[idx]).unwrap();
+                            }
                         }
                     }
 
-                    let mut thread_result = thread_results[thread_id].lock().unwrap();
-                    for (col, &value) in local_result.iter().enumerate() {
-                        thread_result[col] += value;
-                    }
-                });
+                    local_sums
+                })
+                .reduce(
+                    || vec![T::zero(); n_cols],
+                    |mut acc, local| {
+                        for (i, val) in local.into_iter().enumerate() {
+                            acc[i] += val;
+                        }
+                        acc
+                    },
+                );
 
-            let mut final_result = vec![T::zero(); n_cols];
-            for thread_result in thread_results {
-                let result = thread_result.into_inner().unwrap();
-                for (col, value) in result.into_iter().enumerate() {
-                    final_result[col] += value;
-                }
-            }
-
-            Ok(final_result)
+            Ok(result)
         }
     }
 
@@ -950,107 +509,50 @@ impl<M: NumericOps + Send + Sync> MatrixSum for CsrMatrix<M> {
             return Ok(Vec::new());
         }
 
-        let masked_in_count = mask.iter().filter(|&&m| m).count();
-        if masked_in_count == 0 {
+        let masked_count = mask.iter().filter(|&&m| m).count();
+        if masked_count == 0 {
             return Ok(vec![T::zero(); n_rows]);
         }
 
         let total_nnz = self.nnz();
-        const PARALLEL_THRESHOLD: usize = 10000;
 
-        if total_nnz < PARALLEL_THRESHOLD || masked_in_count < 10 {
-            let mut result = vec![T::zero(); n_rows];
+        if total_nnz < PARALLEL_THRESHOLD {
+            let mut result = Vec::with_capacity(n_rows);
 
-            if masked_in_count > self.ncols() * 3 / 4 {
-                unsafe {
-                    let offsets_ptr = row_offsets.as_ptr();
-                    let indices_ptr = col_indices.as_ptr();
-                    let values_ptr = values.as_ptr();
-                    let mask_ptr = mask.as_ptr();
+            for row in 0..n_rows {
+                let start = row_offsets[row];
+                let end = row_offsets[row + 1];
+                let mut sum = T::zero();
 
-                    for row in 0..n_rows {
-                        let start = *offsets_ptr.add(row);
-                        let end = *offsets_ptr.add(row + 1);
-                        let mut sum = T::zero();
-
-                        for idx in start..end {
-                            let col = *indices_ptr.add(idx);
-                            let increment = *mask_ptr.add(col) as usize;
-                            if increment > 0 {
-                                sum += T::from(*values_ptr.add(idx)).unwrap();
-                            }
-                        }
-
-                        result[row] = sum;
+                for idx in start..end {
+                    if mask[col_indices[idx]] {
+                        sum += T::from(values[idx]).unwrap();
                     }
                 }
-            } else {
-                for row in 0..n_rows {
-                    let row_start = row_offsets[row];
-                    let row_end = row_offsets[row + 1];
-                    let mut sum = T::zero();
 
-                    let chunk_end = row_start + ((row_end - row_start) / 4) * 4;
-
-                    for idx in (row_start..chunk_end).step_by(4) {
-                        if mask[col_indices[idx]] {
-                            sum += T::from(values[idx]).unwrap();
-                        }
-                        if mask[col_indices[idx + 1]] {
-                            sum += T::from(values[idx + 1]).unwrap();
-                        }
-                        if mask[col_indices[idx + 2]] {
-                            sum += T::from(values[idx + 2]).unwrap();
-                        }
-                        if mask[col_indices[idx + 3]] {
-                            sum += T::from(values[idx + 3]).unwrap();
-                        }
-                    }
-
-                    for idx in chunk_end..row_end {
-                        if mask[col_indices[idx]] {
-                            sum += T::from(values[idx]).unwrap();
-                        }
-                    }
-
-                    result[row] = sum;
-                }
+                result.push(sum);
             }
 
             Ok(result)
         } else {
-            let chunk_size = (n_rows / (rayon::current_num_threads() * 4)).max(1024);
+            let sums: Vec<T> = (0..n_rows)
+                .into_par_iter()
+                .map(|row| {
+                    let start = row_offsets[row];
+                    let end = row_offsets[row + 1];
+                    let mut sum = T::zero();
 
-            let mut result = vec![T::zero(); n_rows];
-
-            result
-                .par_chunks_mut(chunk_size)
-                .enumerate()
-                .for_each(|(chunk_idx, result_chunk)| {
-                    let start_row = chunk_idx * chunk_size;
-
-                    for (i, sum) in result_chunk.iter_mut().enumerate() {
-                        let row = start_row + i;
-                        if row >= n_rows {
-                            break;
+                    for idx in start..end {
+                        if mask[col_indices[idx]] {
+                            sum += T::from(values[idx]).unwrap();
                         }
-
-                        let row_start = row_offsets[row];
-                        let row_end = row_offsets[row + 1];
-                        let mut local_sum = T::zero();
-
-                        for idx in row_start..row_end {
-                            let col = col_indices[idx];
-                            if mask[col] {
-                                local_sum += T::from(values[idx]).unwrap();
-                            }
-                        }
-
-                        *sum = local_sum;
                     }
-                });
 
-            Ok(result)
+                    sum
+                })
+                .collect();
+
+            Ok(sums)
         }
     }
 
