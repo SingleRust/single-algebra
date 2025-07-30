@@ -1,11 +1,7 @@
 pub mod dense;
 pub mod sparse;
-pub mod svd;
 
 pub mod dimred;
-
-//#[cfg(feature="correction")]
-//pub mod correction;
 
 mod utils;
 

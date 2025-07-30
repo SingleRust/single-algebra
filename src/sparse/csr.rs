@@ -558,16 +558,54 @@ impl<M: NumericOps + Send + Sync> MatrixSum for CsrMatrix<M> {
 
     fn sum_col_squared<T>(&self) -> anyhow::Result<Vec<T>>
     where
-        T: Float + NumCast + AddAssign + Sum,
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
-        let mut result = vec![T::zero(); self.ncols()];
+        let n_cols = self.ncols();
+        let col_indices = self.col_indices();
+        let values = self.values();
+        let total_nnz = values.len();
 
-        for (_, col, &value) in self.triplet_iter() {
-            let val = T::from(value).unwrap();
-            result[col] += val * val;
+        if total_nnz == 0 || n_cols == 0 {
+            return Ok(vec![T::zero(); n_cols]);
         }
 
-        Ok(result)
+        if total_nnz < PARALLEL_THRESHOLD {
+            let mut result = vec![T::zero(); n_cols];
+
+            for (&col_idx, &value) in col_indices.iter().zip(values.iter()) {
+                let val = T::from(value).unwrap();
+                result[col_idx] += val * val;
+            }
+
+            Ok(result)
+        } else {
+            let result = (0..total_nnz)
+                .into_par_iter()
+                .chunks(8192)
+                .map(|chunk_indices| {
+                    let mut local_sums = vec![T::zero(); n_cols];
+
+                    for idx in chunk_indices {
+                        if idx < total_nnz {
+                            let val = T::from(values[idx]).unwrap();
+                            local_sums[col_indices[idx]] += val * val;
+                        }
+                    }
+
+                    local_sums
+                })
+                .reduce(
+                    || vec![T::zero(); n_cols],
+                    |mut acc, local| {
+                        for (i, val) in local.into_iter().enumerate() {
+                            acc[i] += val;
+                        }
+                        acc
+                    },
+                );
+
+            Ok(result)
+        }
     }
 
     fn sum_row_squared<T>(&self) -> anyhow::Result<Vec<T>>
@@ -594,52 +632,97 @@ where
 
     fn var_col<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
         T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
         let sum: Vec<T> = self.sum_col()?;
         let squared_sums: Vec<T> = self.sum_col_squared()?;
-        let mut result = vec![T::zero(); self.ncols()];
+        let ncols = self.ncols();
 
         let n = T::from(self.nrows()).unwrap();
         let n_minus_one = n - T::one();
-        for col in 0..self.ncols() {
-            let mean = sum[col] / n;
-            let population_var = squared_sums[col] / n - mean.powi(2);
 
-            if n_minus_one > T::zero() {
-                result[col] = population_var * (n / n_minus_one)
-            } else {
-                result[col] = T::zero();
+        let total_nnz = self.nnz();
+
+        if ncols < 50_000 || total_nnz < 100_000 {
+            let mut result = vec![T::zero(); ncols];
+
+            for col in 0..ncols {
+                let mean = sum[col] / n;
+                let population_var = squared_sums[col] / n - mean.powi(2);
+
+                if n_minus_one > T::zero() {
+                    result[col] = population_var * (n / n_minus_one)
+                } else {
+                    result[col] = T::zero();
+                }
             }
-        }
 
-        Ok(result)
+            Ok(result)
+        } else {
+            let result: Vec<T> = (0..ncols)
+                .into_par_iter()
+                .map(|col| {
+                    let mean = sum[col] / n;
+                    let population_var = squared_sums[col] / n - mean.powi(2);
+
+                    if n_minus_one > T::zero() {
+                        population_var * (n / n_minus_one)
+                    } else {
+                        T::zero()
+                    }
+                })
+                .collect();
+
+            Ok(result)
+        }
     }
 
     fn var_row<I, T>(&self) -> anyhow::Result<Vec<T>>
     where
-        I: PrimInt + Unsigned + Zero + AddAssign + Into<T>,
+        I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
         T: Float + NumCast + AddAssign + Sum + Send + Sync,
         Self::Item: NumCast,
     {
         let sum: Vec<T> = self.sum_row()?;
         let squared_sums: Vec<T> = self.sum_row_squared()?;
-        let mut result = vec![T::zero(); self.nrows()];
-        let n = T::from(self.nrows()).unwrap();
+        let nrows = self.nrows();
+
+        let n = T::from(nrows).unwrap();
         let n_minus_one = n - T::one();
-        for row in 0..self.nrows() {
-            let mean = sum[row] / n;
-            let population_var = squared_sums[row] / n - mean.powi(2);
 
-            if n_minus_one > T::zero() {
-                result[row] = population_var * (n / n_minus_one);
-            } else {
-                result[row] = T::zero();
+        if nrows < PARALLEL_THRESHOLD {
+            let mut result = vec![T::zero(); nrows];
+
+            for row in 0..nrows {
+                let mean = sum[row] / n;
+                let population_var = squared_sums[row] / n - mean.powi(2);
+
+                if n_minus_one > T::zero() {
+                    result[row] = population_var * (n / n_minus_one);
+                } else {
+                    result[row] = T::zero();
+                }
             }
-        }
 
-        Ok(result)
+            Ok(result)
+        } else {
+            let result: Vec<T> = (0..nrows)
+                .into_par_iter()
+                .map(|row| {
+                    let mean = sum[row] / n;
+                    let population_var = squared_sums[row] / n - mean.powi(2);
+
+                    if n_minus_one > T::zero() {
+                        population_var * (n / n_minus_one)
+                    } else {
+                        T::zero()
+                    }
+                })
+                .collect();
+
+            Ok(result)
+        }
     }
 
     /// Calculate column-wise variance and store results in the provided slice
