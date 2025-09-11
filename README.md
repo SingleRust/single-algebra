@@ -1,49 +1,36 @@
 # single-algebra 🧮
 
-A powerful linear algebra and machine learning utilities library for Rust, providing efficient matrix operations, dimensionality reduction, and statistical analysis tools.
+A high-performance linear algebra library optimized for sparse matrices and dimensionality reduction algorithms. Designed for machine learning, data analysis, and scientific computing applications where efficiency with sparse data is crucial.
 
 ## Features 🚀
 
-- **Efficient Matrix Operations**: Support for both dense and sparse matrices (CSR/CSC formats)
-- **Dimensionality Reduction**: PCA implementations for both dense and sparse matrices
-- **SVD Implementations**: Multiple SVD backends including LAPACK and Faer
-- **Statistical Analysis**: Comprehensive statistical operations with batch processing support
-- **Similarity Measures**: Collection of distance/similarity metrics for high-dimensional data
-- **Masking Support**: Selective data processing with boolean masks
-- **Parallel Processing**: Efficient multi-threaded implementations using Rayon
-- **Feature-Rich**: Configurable through feature flags for specific needs
+- **Sparse Matrix Operations**: Efficient CSR/CSC matrix implementations with comprehensive operations
+- **Advanced PCA**: Multiple PCA variants including standard and masked sparse PCA
+- **Flexible SVD**: Support for both Lanczos and randomized SVD algorithms
+- **Feature Masking**: Selective analysis of feature subsets for targeted dimensionality reduction
+- **Parallel Processing**: Multi-threaded operations using Rayon for large datasets
+- **Memory Efficient**: Optimized for large, sparse datasets that don't fit in memory
+- **Type Generic**: Supports both `f32` and `f64` numeric types
+- **Utilities**: Data preprocessing with normalization and logarithmic transformations
 
-## Matrix Operations 📊
+## Core Modules 📊
 
-- **SVD Decomposition**: Choose between parallel, LAPACK, or Faer implementations
-- **Sparse Matrix Support**: Comprehensive operations for CSR and CSC sparse matrix formats
-- **Masked Operations**: Selective data processing with boolean masks
-- **Batch Processing**: Statistical operations grouped by batch identifiers
-- **Normalization**: Row and column normalization with customizable targets
+### Sparse Matrix Operations
+- **CSR/CSC Formats**: Comprehensive sparse matrix support with efficient storage
+- **Matrix Arithmetic**: Sum operations, column statistics, and element-wise operations
+- **Memory Optimization**: Designed for large, high-dimensional sparse datasets
 
-## Dimensionality Reduction ⬇️
+### Dimensionality Reduction ⬇️
+- **Sparse PCA**: Principal Component Analysis optimized for sparse CSR matrices
+- **Masked Sparse PCA**: PCA with feature masking for selective analysis
+- **SVD Algorithms**: Choice between Lanczos (exact) and randomized (fast) SVD methods
+- **Variance Analysis**: Explained variance ratios and cumulative variance calculations
+- **Feature Importance**: Component loading analysis for feature interpretation
 
-- **PCA Framework**: Flexible implementation with customizable SVD backends
-- **Dense Matrix PCA**: Optimized implementation for dense matrices
-- **Sparse Matrix PCA**: Memory-efficient PCA for sparse matrices
-- **Masked Sparse PCA**: Apply PCA on selected features only
-- **Incremental Processing**: Support for large datasets that don't fit in memory
-
-## Similarity Measures 📏
-
-- **Cosine Similarity**: Measure similarity based on the cosine of the angle between vectors
-- **Euclidean Similarity**: Similarity based on Euclidean distance
-- **Pearson Similarity**: Measure linear correlation between vectors
-- **Manhattan Similarity**: Similarity based on Manhattan distance
-- **Jaccard Similarity**: Measure similarity as intersection over union
-
-## Statistical Analysis 📈
-
-- **Basic Statistics**: Mean, variance, sum, min/max operations
-- **Batch Statistics**: Compute statistics grouped by batch identifiers
-- **Matrix Variance**: Efficient variance calculations for matrices
-- **Nonzero Counting**: Count non-zero elements in sparse matrices
-- **Masked Statistics**: Compute statistics on selected rows/columns only
+### Data Preprocessing �
+- **Normalization**: Row and column normalization utilities
+- **Log Transformations**: Log1P transformations for numerical stability
+- **Centering**: Optional data centering for PCA and other algorithms
 
 ## Installation
 
@@ -51,49 +38,61 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-single-algebra = "0.5.0"
+single-algebra = "0.8.6"
 ```
-
-### Feature Flags
-
-Enable optional features based on your needs:
-
-```toml
-[dependencies]
-single-algebra = { version = "0.5.0", features = ["lapack", "faer"] }
-```
-
-Available features:
-- `smartcore`: Enable integration with the SmartCore machine learning library
-- `lapack`: Use the LAPACK backend for linear algebra operations
-- `faer`: Use the Faer backend for linear algebra operations
-- `simba`: Enable SIMD optimizations via simba
 
 ## Usage Examples
 
-### Basic PCA with LAPACK Backend
+### Sparse PCA with Builder Pattern
 
 ```rust
-use ndarray::{Array2, ArrayView2};
-use single_algebra::dimred::pca::dense::{PCABuilder, LapackSVD};
+use nalgebra_sparse::CsrMatrix;
+use single_algebra::dimred::pca::{SparsePCABuilder, SVDMethod};
+use single_algebra::dimred::pca::sparse::PowerIterationNormalizer;
 
-// Create a sample matrix
-let data = array![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]];
+// Create or load your sparse matrix (samples × features)
+let sparse_matrix: CsrMatrix<f64> = create_your_sparse_matrix();
 
-// Build PCA with LAPACK backend
-let mut pca = PCABuilder::new(LapackSVD)
-    .n_components(2)
+// Build PCA with customized parameters
+let mut pca = SparsePCABuilder::new()
+    .n_components(50)
     .center(true)
-    .scale(false)
+    .verbose(true)
+    .svd_method(SVDMethod::Random {
+        n_oversamples: 10,
+        n_power_iterations: 7,
+        normalizer: PowerIterationNormalizer::QR,
+    })
     .build();
 
 // Fit and transform data
-pca.fit(data.view()).unwrap();
-let transformed = pca.transform(data.view()).unwrap();
+let transformed = pca.fit_transform(&sparse_matrix).unwrap();
 
-// Access results
-let components = pca.components().unwrap();
-let explained_variance = pca.explained_variance_ratio().unwrap();
+// Analyze results
+let explained_variance_ratio = pca.explained_variance_ratio().unwrap();
+let cumulative_variance = pca.cumulative_explained_variance_ratio().unwrap();
+let feature_importance = pca.feature_importances().unwrap();
+```
+
+### Masked Sparse PCA for Feature Subset Analysis
+
+```rust
+use single_algebra::dimred::pca::{MaskedSparsePCABuilder, SVDMethod};
+
+// Create a feature mask (true = include, false = exclude)
+let feature_mask = vec![true, false, true, true, false, true]; // Include features 0, 2, 3, 5
+
+// Build masked PCA
+let mut masked_pca = MaskedSparsePCABuilder::new()
+    .n_components(10)
+    .mask(feature_mask)
+    .center(true)
+    .verbose(true)
+    .svd_method(SVDMethod::Lanczos)
+    .build();
+
+// Perform PCA on selected features only
+let transformed = masked_pca.fit_transform(&sparse_matrix).unwrap();
 ```
 
 ### Sparse Matrix Operations
@@ -103,52 +102,58 @@ use nalgebra_sparse::{CooMatrix, CsrMatrix};
 use single_algebra::sparse::MatrixSum;
 
 // Create a sparse matrix
-let mut coo = CooMatrix::new(3, 3);
-coo.push(0, 0, 1.0);
-coo.push(1, 1, 2.0);
-coo.push(2, 2, 3.0);
+let mut coo = CooMatrix::new(1000, 5000);
+// ... populate with data ...
 let csr: CsrMatrix<f64> = (&coo).into();
 
-// Calculate column sums
+// Efficient column operations
 let col_sums: Vec<f64> = csr.sum_col().unwrap();
+let col_squared_sums: Vec<f64> = csr.sum_col_squared().unwrap();
 ```
 
-### Batch Processing
+### Data Preprocessing
 
 ```rust
-use nalgebra_sparse::CsrMatrix;
-use single_algebra::sparse::BatchMatrixMean;
+use single_algebra::{Normalize, Log1P};
 
-// Sample data with batch identifiers
-let matrix = create_sparse_matrix();
-let batches = vec!["batch1", "batch1", "batch2", "batch2", "batch3"];
-
-// Calculate mean per batch
-let batch_means = matrix.mean_batch_col(&batches).unwrap();
-
-// Access results for a specific batch
-let batch1_means = batch_means.get("batch1").unwrap();
+// Apply preprocessing transformations
+let normalized_data = your_data.normalize()?;
+let log_transformed = your_data.log1p()?;
 ```
 
-### Similarity Measures
+## Algorithm Selection Guide
 
-```rust
-use ndarray::Array1;
-use single_algebra::similarity::{SimilarityMeasure, CosineSimilarity};
+### When to Use Each PCA Variant
 
-let a = Array1::from_vec(vec![1.0, 2.0, 3.0]);
-let b = Array1::from_vec(vec![4.0, 5.0, 6.0]);
+- **SparsePCA**: For standard dimensionality reduction on sparse matrices
+- **MaskedSparsePCA**: When you need to analyze specific feature subsets or handle missing data patterns
 
-let cosine = CosineSimilarity;
-let similarity = cosine.calculate(a.view(), b.view());
-```
+### SVD Method Selection
 
-## Performance Considerations
+- **Lanczos**: More accurate, deterministic results. Best for smaller problems or when precision is critical
+- **Randomized**: Faster computation, especially for large matrices. Configurable accuracy vs. speed trade-off
 
-- For large matrices, consider using sparse representations (CSR/CSC)
-- Enable the appropriate backend (`lapack` or `faer`) based on your needs
-- Use masked operations when working with subsets of data
-- Batch processing can significantly improve performance for grouped operations
+### Performance Optimization
+
+- Use sparse matrices (CSR format) for datasets with >90% zero values
+- Enable verbose mode to monitor performance and convergence
+- For very large datasets, consider using randomized SVD with appropriate oversampling
+- Parallel processing is automatically utilized for transformation operations
+
+## Planned Features 🚧
+
+- **t-SNE**: t-Distributed Stochastic Neighbor Embedding for non-linear visualization
+- **UMAP**: Uniform Manifold Approximation and Projection for manifold learning
+- **Additional similarity measures**: More distance metrics and similarity functions
+- **Batch processing**: Enhanced support for processing data in chunks
+
+## Performance Focus
+
+This library is specifically optimized for:
+- **Large sparse datasets** (text analysis, genomics, recommendation systems)
+- **Memory-constrained environments**
+- **High-dimensional data** requiring dimensionality reduction
+- **Scientific computing** workflows requiring numerical precision
 
 ## Contributing
 

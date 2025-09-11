@@ -1,3 +1,8 @@
+//! # Sparse Principal Component Analysis
+//!
+//! This module implements PCA for sparse CSR matrices with optional data centering.
+//! Supports both Lanczos and randomized SVD algorithms for flexible performance/accuracy trade-offs.
+
 use crate::dimred::pca::SVDMethod;
 use crate::sparse::MatrixSum;
 use anyhow::anyhow;
@@ -11,6 +16,21 @@ use single_svdlib::SvdFloat;
 use single_utilities::traits::{FloatOpsTS, NumericOpsTS};
 use std::ops::Div;
 
+/// Principal Component Analysis for sparse CSR matrices.
+///
+/// Performs dimensionality reduction by finding the directions of maximum variance
+/// in the data. Efficiently handles sparse matrices while supporting optional
+/// data centering and multiple SVD algorithms.
+///
+/// # Type Parameters
+/// - `T`: Numeric type supporting SVD operations (typically `f32` or `f64`)
+///
+/// # Features
+/// - Sparse matrix support via CSR format
+/// - Optional data centering
+/// - Lanczos or randomized SVD algorithms
+/// - Explained variance analysis
+/// - Feature importance calculation
 pub struct SparsePCA<T>
 where
     T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
@@ -31,6 +51,16 @@ impl<T> SparsePCA<T>
 where
     T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
 {
+    /// Creates a new SparsePCA instance with specified parameters.
+    ///
+    /// # Parameters
+    /// - `n_components`: Number of principal components to compute
+    /// - `alpha`: Regularization parameter (currently unused)
+    /// - `tollerance`: Convergence tolerance for SVD algorithms
+    /// - `random_seed`: Seed for reproducible randomized operations
+    /// - `center`: Whether to center the data (subtract column means)
+    /// - `verbose`: Enable detailed progress output
+    /// - `svdmethod`: SVD algorithm to use (Lanczos or Randomized)
     pub fn new(
         n_components: usize,
         alpha: T,
@@ -54,6 +84,22 @@ where
         }
     }
 
+    /// Fits the PCA model to the provided sparse matrix.
+    ///
+    /// Computes the principal components by performing SVD on the input matrix.
+    /// Optionally centers the data and calculates explained variance statistics.
+    ///
+    /// # Parameters
+    /// - `x`: Input sparse CSR matrix (samples × features)
+    ///
+    /// # Returns
+    /// - `Ok(&mut self)`: Success, model is fitted and ready for transformation
+    /// - `Err`: SVD computation failed or other error occurred
+    ///
+    /// # Side Effects
+    /// - Stores principal components in `components_`
+    /// - Stores explained variance in `explained_variance_`
+    /// - Stores column means in `mean_` (if centering enabled)
     pub fn fit(&mut self, x: &CsrMatrix<T>) -> anyhow::Result<&mut Self> {
         let n_samples = x.nrows();
         let n_features = x.ncols();
@@ -173,7 +219,7 @@ where
         if !self.center {
             total_var = T::zero(); // Just to make sure
             for i in 0..res.s.len() {
-                total_var = total_var + num_traits::Float::powi(res.s[i], 2) / n_minus_1;
+                total_var += num_traits::Float::powi(res.s[i], 2) / n_minus_1;
             }
         }
 
@@ -196,6 +242,17 @@ where
         Ok(self)
     }
 
+    /// Transforms data to the reduced dimensional space.
+    ///
+    /// Projects the input matrix onto the principal components learned during fitting.
+    /// The model must be fitted before calling this method.
+    ///
+    /// # Parameters
+    /// - `x`: Input sparse CSR matrix to transform (samples × features)
+    ///
+    /// # Returns
+    /// - `Ok(Array2<T>)`: Transformed data (samples × n_components)
+    /// - `Err`: Model not fitted or transformation failed
     pub fn transform(&self, x: &CsrMatrix<T>) -> anyhow::Result<Array2<T>> {
         let components = self
             .components_
@@ -228,6 +285,14 @@ where
         Ok(transformed)
     }
 
+    /// Calculates feature importances based on component loadings.
+    ///
+    /// Returns the squared loadings of each feature for each component,
+    /// indicating how much each feature contributes to each principal component.
+    ///
+    /// # Returns
+    /// - `Ok(Array2<T>)`: Feature importances (n_components × n_features)
+    /// - `Err`: Model not fitted
     pub fn feature_importances(&self) -> anyhow::Result<Array2<T>> {
         let components = self
             .components_
@@ -237,6 +302,14 @@ where
         Ok(importances)
     }
 
+    /// Calculates the proportion of variance explained by each component.
+    ///
+    /// Returns the ratio of each component's explained variance to the total
+    /// variance explained by all computed components.
+    ///
+    /// # Returns
+    /// - `Ok(Array1<T>)`: Variance ratios for each component (sum ≤ 1.0)
+    /// - `Err`: Model not fitted
     pub fn explained_variance_ratio(&self) -> anyhow::Result<Array1<T>> {
         let explained_variance = self
             .explained_variance_
@@ -249,6 +322,15 @@ where
         Ok(ratios)
     }
 
+    /// Calculates cumulative explained variance ratios.
+    ///
+    /// Returns the cumulative sum of explained variance ratios, useful for
+    /// determining how many components are needed to explain a desired
+    /// percentage of the total variance.
+    ///
+    /// # Returns
+    /// - `Ok(Array1<T>)`: Cumulative variance ratios (monotonically increasing)
+    /// - `Err`: Model not fitted
     pub fn cumulative_explained_variance_ratio(&self) -> anyhow::Result<Array1<T>> {
         let ratios = self.explained_variance_ratio()?;
         let mut cumulative = Array1::zeros(ratios.len());
@@ -261,12 +343,36 @@ where
         Ok(cumulative)
     }
 
+    /// Convenience method that fits the model and transforms the data in one step.
+    ///
+    /// Equivalent to calling `fit(x)` followed by `transform(x)`.
+    ///
+    /// # Parameters
+    /// - `x`: Input sparse CSR matrix (samples × features)
+    ///
+    /// # Returns
+    /// - `Ok(Array2<T>)`: Transformed data (samples × n_components)
+    /// - `Err`: Fitting or transformation failed
     pub fn fit_transform(&mut self, x: &CsrMatrix<T>) -> anyhow::Result<Array2<T>> {
         self.fit(x)?;
         self.transform(x)
     }
 }
 
+/// Builder for configuring and creating SparsePCA instances.
+///
+/// Provides a fluent interface for setting PCA parameters with sensible defaults.
+/// Use `SparsePCABuilder::new()` to start building and `build()` to create the final instance.
+///
+/// # Example Usage
+/// ```ignore
+/// let pca = SparsePCABuilder::new()
+///     .n_components(50)
+///     .center(true)
+///     .verbose(true)
+///     .svd_method(SVDMethod::Lanczos)
+///     .build();
+/// ```
 pub struct SparsePCABuilder<T>
 where
     T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
@@ -301,10 +407,23 @@ impl<T> SparsePCABuilder<T>
 where
     T: SvdFloat + FloatOpsTS + 'static + RealField + ndarray::ScalarOperand,
 {
+    /// Creates a new builder with default parameters.
+    ///
+    /// Default values:
+    /// - `n_components`: 50
+    /// - `alpha`: 1.0
+    /// - `tolerance`: 1e-6
+    /// - `random_seed`: 42
+    /// - `center`: true
+    /// - `verbose`: false
+    /// - `svdmethod`: Lanczos
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the number of principal components to compute.
+    ///
+    /// Should be less than min(n_samples, n_features) for meaningful results.
     pub fn n_components(mut self, n_components: usize) -> Self {
         self.n_components = n_components;
         self
@@ -325,6 +444,10 @@ where
         self
     }
 
+    /// Sets whether to center the data before PCA.
+    ///
+    /// When `true`, subtracts column means from the data. Generally recommended
+    /// unless the data is already centered or centering is not desired.
     pub fn center(mut self, center: bool) -> Self {
         self.center = center;
         self
@@ -335,11 +458,16 @@ where
         self
     }
 
+    /// Sets the SVD method to use for computation.
+    ///
+    /// - `SVDMethod::Lanczos`: More accurate, deterministic
+    /// - `SVDMethod::Random`: Faster, especially for large matrices
     pub fn svd_method(mut self, svdmethod: SVDMethod) -> Self {
         self.svdmethod = svdmethod;
         self
     }
 
+    /// Builds the final SparsePCA instance with the configured parameters.
     pub fn build(self) -> SparsePCA<T> {
         SparsePCA {
             n_components: self.n_components,

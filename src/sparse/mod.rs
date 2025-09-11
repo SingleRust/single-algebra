@@ -1,3 +1,23 @@
+//! # Sparse Matrix Module
+//!
+//! This module provides trait-based operations for sparse matrices in CSR (Compressed Sparse Row)
+//! and CSC (Compressed Sparse Column) formats. It implements efficient statistical computations
+//! including non-zero counting, summation, variance calculation, and batch operations.
+//!
+//! ## Matrix Formats
+//! - **CSR (Compressed Sparse Row)**: Efficient for row-wise operations and matrix-vector multiplication
+//! - **CSC (Compressed Sparse Column)**: Efficient for column-wise operations and transposed operations
+//!
+//! ## Core Traits
+//! - [`MatrixNonZero`]: Count non-zero elements per row/column
+//! - [`MatrixSum`]: Sum elements per row/column with squared variants
+//! - [`MatrixVariance`]: Calculate variance per row/column
+//! - [`MatrixMinMax`]: Find minimum and maximum values per row/column
+//! - [`BatchMatrixVariance`] & [`BatchMatrixMean`]: Batch-wise statistical operations
+//! - [`MatrixNTop`]: Sum of top-n elements per row
+//!
+//! All operations support both regular and masked computations for selective analysis.
+
 use std::collections::HashMap;
 use std::ops::AddAssign;
 
@@ -8,6 +28,10 @@ use single_utilities::traits::NumericOps;
 pub mod csc;
 pub mod csr;
 
+/// Trait for counting non-zero elements in sparse matrices.
+/// 
+/// Provides methods to count non-zero elements per row or column, with support
+/// for masked operations and in-place chunk processing for memory efficiency.
 pub trait MatrixNonZero {
     fn nonzero_col<T>(&self) -> anyhow::Result<Vec<T>>
     where
@@ -36,6 +60,10 @@ pub trait MatrixNonZero {
         T: PrimInt + Unsigned + Zero + AddAssign + Send + Sync;
 }
 
+/// Trait for summing elements in sparse matrices.
+/// 
+/// Provides methods to sum elements per row or column, including squared sums
+/// and masked operations for selective computation.
 pub trait MatrixSum {
     type Item: NumCast;
 
@@ -73,6 +101,10 @@ pub trait MatrixSum {
         T: Float + NumCast + AddAssign + std::iter::Sum + Send + Sync;
 }
 
+/// Trait for calculating variance in sparse matrices.
+/// 
+/// Computes sample variance per row or column with support for masked operations
+/// and in-place chunk processing.
 pub trait MatrixVariance {
     type Item: NumCast;
 
@@ -109,6 +141,10 @@ pub trait MatrixVariance {
         T: Float + NumCast + AddAssign + std::iter::Sum + Send + Sync;
 }
 
+/// Trait for finding minimum and maximum values in sparse matrices.
+/// 
+/// Efficiently computes min/max values per row or column with support for
+/// in-place chunk processing to reduce memory allocation.
 pub trait MatrixMinMax {
     type Item;
 
@@ -129,6 +165,10 @@ pub trait MatrixMinMax {
         Item: NumCast + Copy + PartialOrd + NumericOps + Send + Sync;
 }
 
+/// Trait for batch-wise variance calculations in sparse matrices.
+/// 
+/// Enables computation of variance statistics grouped by batch identifiers,
+/// useful for analyzing data with categorical groupings.
 pub trait BatchMatrixVariance {
     type Item: NumCast;
 
@@ -147,6 +187,10 @@ pub trait BatchMatrixVariance {
         B: BatchIdentifier;
 }
 
+/// Trait for batch-wise mean calculations in sparse matrices.
+/// 
+/// Enables computation of mean statistics grouped by batch identifiers,
+/// complementing variance calculations for comprehensive batch analysis.
 pub trait BatchMatrixMean {
     type Item: NumCast;
 
@@ -163,6 +207,10 @@ pub trait BatchMatrixMean {
         B: BatchIdentifier;
 }
 
+/// Trait for top-N element operations in sparse matrices.
+/// 
+/// Provides methods to sum the top N largest elements per row,
+/// useful for feature selection and dimension reduction algorithms.
 pub trait MatrixNTop {
     type Item: NumCast;
 

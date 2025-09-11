@@ -1,11 +1,12 @@
 [package]
 name = "single_algebra"
-version = "0.8.6"
+version = "0.8.7"
 edition = "2021"
 license-file = "LICENSE.md"
 description = "A linear algebra convenience library for the single-rust library. Can be used externally as well."
 categories = ["science"]
 repository = "https://github.com/SingleRust/single-algebra"
+homepage = "https://singlerust.com"
 
 [[bench]]
 name = "csc_matrix_benchmark"
@@ -28,10 +29,10 @@ nalgebra-sparse = "0.10"
 ndarray = { version = "0.16", features = ["rayon"] }
 nshare = { version = "0.10.0", features = ["ndarray", "nalgebra"] }
 num-traits = "0.2.19"
-rayon = "1.10.0"
-simba = { version = "0.9.0", optional = true }
+rayon = "1.11.0"
+simba = { version = "0.9.1", optional = true }
 rand = "0.9.2"
-single-utilities = "0.8.0"
+single-utilities = "0.8.5"
 linfa-tsne = {version = "0.7.1"}
 linfa = "0.7.1"
 single-svdlib = "1.0.6"
