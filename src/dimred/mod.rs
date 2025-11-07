@@ -18,4 +18,4 @@
 //! - Use **UMAP** (when available) for preserving both local and global structure in embeddings
 
 pub mod pca;
-//pub mod tsne;
+pub mod tsne;
