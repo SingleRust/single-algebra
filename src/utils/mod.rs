@@ -24,7 +24,7 @@ impl<T: Default + Clone> ZeroVec for Vec<T> {
     fn zero_len(&mut self, len: usize) {
         self.clear();
         self.reserve(len);
-        self.extend(repeat(T::default()).take(len));
+        self.extend(std::iter::repeat_n(T::default(), len));
     }
 }
 

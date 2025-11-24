@@ -1,6 +1,6 @@
 [package]
 name = "single_algebra"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 license-file = "LICENSE.md"
 description = "A linear algebra convenience library for the single-rust library. Can be used externally as well."
@@ -23,19 +23,18 @@ simba = ["dep:simba"]
 
 [dependencies]
 anyhow = "1.0"
-nalgebra = { version = "0.33.2", features = ["serde-serialize"] }
+nalgebra = { version = "0.34", features = ["serde-serialize"] }
 nalgebra-lapack = { version = "0.25.0", default-features = false, optional = true }
 nalgebra-sparse = "0.11"
 ndarray = { version = "0.16", features = ["rayon"] }
-nshare = { version = "0.10.0", features = ["ndarray", "nalgebra"] }
 num-traits = "0.2.19"
 rayon = "1.11.0"
 simba = { version = "0.9.1", optional = true }
 rand = "0.9.2"
-single-utilities = "0.8.5"
+single-utilities = { version = "0.9.0", features = ["convert"] }
 linfa-tsne = {version = "0.7.1"}
 linfa = "0.7.1"
-single-svdlib = "1.0.6"
+single-svdlib = "1.0.9"
 bhtsne = "0.5.4"
 
 [dev-dependencies]

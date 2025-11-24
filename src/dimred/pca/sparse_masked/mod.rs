@@ -10,12 +10,11 @@ use anyhow::anyhow;
 use nalgebra::RealField;
 use nalgebra_sparse::CsrMatrix;
 use ndarray::{Array1, Array2};
-use nshare::{IntoNalgebra, IntoNdarray2};
 use rayon::iter::ParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator};
 use single_svdlib::lanczos::masked::MaskedCSRMatrix;
 use single_svdlib::{lanczos, randomized, SvdFloat};
-use single_utilities::traits::FloatOpsTS;
+use single_utilities::traits::{FloatOpsTS, IntoNalgebra, IntoNdarray2};
 use std::collections::HashMap;
 use std::time::Instant;
 

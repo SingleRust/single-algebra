@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::iter::Sum;
 use std::ops::AddAssign;
-use std::sync::Mutex;
 
 use super::{
     BatchMatrixMean, BatchMatrixVariance, MatrixMinMax, MatrixNonZero, MatrixSum, MatrixVariance,

@@ -9,11 +9,10 @@ use anyhow::anyhow;
 use nalgebra::RealField;
 use nalgebra_sparse::CsrMatrix;
 use ndarray::{Array1, Array2};
-use nshare::{IntoNalgebra, IntoNdarray2};
 use single_svdlib::lanczos::svd_las2;
 use single_svdlib::randomized::randomized_svd;
 use single_svdlib::SvdFloat;
-use single_utilities::traits::{FloatOpsTS, NumericOpsTS};
+use single_utilities::traits::{FloatOpsTS, IntoNalgebra, IntoNdarray2};
 use std::ops::Div;
 
 /// Principal Component Analysis for sparse CSR matrices.
