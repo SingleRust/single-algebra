@@ -27,6 +27,7 @@ use single_utilities::traits::NumericOps;
 
 pub mod csc;
 pub mod csr;
+pub mod sprs_impl;
 
 /// Trait for counting non-zero elements in sparse matrices.
 /// 
