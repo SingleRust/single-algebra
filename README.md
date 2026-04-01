@@ -5,11 +5,12 @@ A high-performance linear algebra library optimized for sparse matrices and dime
 ## Features
 
 - **Multi-Backend Sparse Support**: Comprehensive trait implementations for both `nalgebra-sparse` and `sprs` (CSR/CSC formats).
-- **Advanced Statistics**: Performant calculation of non-zeros, sums, means, and variances (including numerically stable 2-pass algorithms).
+- **Advanced Statistics**: Performant calculation of non-zeros, sums, means, and variances.
+- **Numerically Stable**: Uses modified two-pass variance algorithms to prevent catastrophic cancellation with high-magnitude data offsets.
+- **Optimized Top-N**: $O(N)$ selection of top elements using `select_nth_unstable` logic, avoiding expensive full sorts.
 - **Dimensionality Reduction**: High-performance implementations of PCA, Sparse PCA, Masked Sparse PCA, and TSNE.
 - **Preprocessing Utilities**: In-place normalization and Log1P transformations.
-- **Multi-threaded Execution**: Seamless integration with `Rayon` for parallelizing large-scale matrix operations.
-- **Numerically Stable**: Optimized for stability with high-dimensional data and large numerical offsets.
+- **Universal Parallelization**: Seamless integration with `Rayon` across all core operations, with automatic thresholding for large datasets.
 
 ## Backends
 
@@ -27,12 +28,17 @@ use sprs::CsMat;
 
 let mat = CsMat::new_csc((3, 3), vec![0, 2, 4, 5], vec![0, 2, 0, 1, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0]);
 let row_sums: Vec<f64> = mat.sum_row().unwrap();
+// Generic u32 count, f64 result
 let col_vars: Vec<f64> = mat.var_col::<u32, f64>().unwrap();
 ```
 
 ## Performance
 
-This library is designed to handle sparse datasets where >90% of values are zero. By leveraging format-aware iterators (e.g., prioritized row-iteration for CSR), we achieve $O(NNZ)$ performance for almost all statistical operations while minimizing heap allocations.
+This library is designed to handle sparse datasets where >90% of values are zero. 
+
+- **Format-Aware Iteration**: Prioritizes row-iteration for CSR and column-iteration for CSC to maximize cache locality and maintain $O(NNZ)$ complexity.
+- **Memory Efficiency**: Minimizes heap allocations by providing `_chunk` methods for in-place buffer processing.
+- **Automatic Concurrency**: Core operations (Sum, NonZero, Variance, MinMax) automatically parallelize via `Rayon` when the matrix exceeds 200,000 non-zero elements.
 
 ## Installation
 
