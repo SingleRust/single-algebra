@@ -1123,7 +1123,7 @@ where
                 for j in row_start..row_end {
                     let col = self.col_indices()[j];
                     let val = T::from(self.values()[j]).unwrap();
-                    batch_means[col] = batch_means[col] + val;
+                    batch_means[col] += val;
                     batch_counts[col] += 1;
                 }
             }
@@ -1144,7 +1144,7 @@ where
                     let col = self.col_indices()[j];
                     let val = T::from(self.values()[j]).unwrap();
                     let diff = val - batch_means[col];
-                    batch_sum_sq[col] = batch_sum_sq[col] + diff * diff;
+                    batch_sum_sq[col] += diff * diff;
                 }
             }
 

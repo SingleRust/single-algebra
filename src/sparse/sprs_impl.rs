@@ -10,15 +10,15 @@ use crate::utils::Normalize;
 use crate::utils::{BatchIdentifier, Log1P};
 use anyhow::anyhow;
 use num_traits::{Float, NumCast, PrimInt, Unsigned, Zero};
-use rayon::iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use single_utilities::traits::{FloatOpsTS, NumericOps};
 use single_utilities::types::Direction;
-use sprs::{CsMatI, CompressedStorage, SpIndex};
+use sprs::{CompressedStorage, CsMatI, SpIndex};
 
 const PARALLEL_THRESHOLD: usize = 200_000;
 
-impl<M, I> MatrixNonZero for CsMatI<M, I> 
-where 
+impl<M, I> MatrixNonZero for CsMatI<M, I>
+where
     M: NumericOps + Send + Sync,
     I: SpIndex + PrimInt + Unsigned + Send + Sync,
 {
@@ -56,7 +56,8 @@ where
             }
             CompressedStorage::CSC => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<T> = (0..self.cols()).into_par_iter()
+                    let results: Vec<T> = (0..self.cols())
+                        .into_par_iter()
                         .map(|col_idx| T::from(self.outer_view(col_idx).unwrap().nnz()).unwrap())
                         .collect();
                     for (i, count) in results.into_iter().enumerate() {
@@ -83,7 +84,8 @@ where
         match self.storage() {
             CompressedStorage::CSR => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<T> = (0..self.rows()).into_par_iter()
+                    let results: Vec<T> = (0..self.rows())
+                        .into_par_iter()
                         .map(|row_idx| T::from(self.outer_view(row_idx).unwrap().nnz()).unwrap())
                         .collect();
                     for (i, count) in results.into_iter().enumerate() {
@@ -174,7 +176,7 @@ where
 }
 
 impl<M, I> MatrixSum for CsMatI<M, I>
-where 
+where
     M: NumericOps + NumCast + Send + Sync,
     I: SpIndex + PrimInt + Unsigned + Send + Sync,
 {
@@ -214,8 +216,16 @@ where
             }
             CompressedStorage::CSC => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<T> = (0..self.cols()).into_par_iter()
-                        .map(|col_idx| self.outer_view(col_idx).unwrap().data().iter().map(|&v| T::from(v).unwrap()).sum())
+                    let results: Vec<T> = (0..self.cols())
+                        .into_par_iter()
+                        .map(|col_idx| {
+                            self.outer_view(col_idx)
+                                .unwrap()
+                                .data()
+                                .iter()
+                                .map(|&v| T::from(v).unwrap())
+                                .sum()
+                        })
                         .collect();
                     for (i, sum) in results.into_iter().enumerate() {
                         reference[i] += sum;
@@ -242,8 +252,16 @@ where
         match self.storage() {
             CompressedStorage::CSR => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<T> = (0..self.rows()).into_par_iter()
-                        .map(|row_idx| self.outer_view(row_idx).unwrap().data().iter().map(|&v| T::from(v).unwrap()).sum())
+                    let results: Vec<T> = (0..self.rows())
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            self.outer_view(row_idx)
+                                .unwrap()
+                                .data()
+                                .iter()
+                                .map(|&v| T::from(v).unwrap())
+                                .sum()
+                        })
                         .collect();
                     for (i, sum) in results.into_iter().enumerate() {
                         reference[i] += sum;
@@ -277,7 +295,8 @@ where
             CompressedStorage::CSR => {
                 for (row_idx, row_vec) in self.outer_iterator().enumerate() {
                     if mask[row_idx] {
-                        for (&col_idx, &val) in row_vec.indices().iter().zip(row_vec.data().iter()) {
+                        for (&col_idx, &val) in row_vec.indices().iter().zip(row_vec.data().iter())
+                        {
                             result[col_idx.index()] += T::from(val).unwrap();
                         }
                     }
@@ -322,7 +341,8 @@ where
             CompressedStorage::CSC => {
                 for (col_idx, col_vec) in self.outer_iterator().enumerate() {
                     if mask[col_idx] {
-                        for (&row_idx, &val) in col_vec.indices().iter().zip(col_vec.data().iter()) {
+                        for (&row_idx, &val) in col_vec.indices().iter().zip(col_vec.data().iter())
+                        {
                             result[row_idx.index()] += T::from(val).unwrap();
                         }
                     }
@@ -411,7 +431,7 @@ where
 
         let means: Vec<T> = self.sum_col::<T>()?.into_iter().map(|s| s / n).collect();
         let mut sum_sq_diffs = vec![T::zero(); self.cols()];
-        
+
         match self.storage() {
             CompressedStorage::CSR => {
                 for (val, (_, col)) in self.iter() {
@@ -429,7 +449,8 @@ where
             }
             CompressedStorage::CSC => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<T> = (0..self.cols()).into_par_iter()
+                    let results: Vec<T> = (0..self.cols())
+                        .into_par_iter()
                         .map(|col_idx| {
                             let col_vec = self.outer_view(col_idx).unwrap();
                             let mean = means[col_idx];
@@ -465,9 +486,12 @@ where
                 }
             }
         }
-        
+
         let n_minus_1 = n - T::one();
-        Ok(sum_sq_diffs.into_iter().map(|ssd| ssd / n_minus_1).collect())
+        Ok(sum_sq_diffs
+            .into_iter()
+            .map(|ssd| ssd / n_minus_1)
+            .collect())
     }
 
     fn var_row<V, T>(&self) -> anyhow::Result<Vec<T>>
@@ -482,11 +506,12 @@ where
 
         let means: Vec<T> = self.sum_row::<T>()?.into_iter().map(|s| s / n).collect();
         let mut sum_sq_diffs = vec![T::zero(); self.rows()];
-        
+
         match self.storage() {
             CompressedStorage::CSR => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<T> = (0..self.rows()).into_par_iter()
+                    let results: Vec<T> = (0..self.rows())
+                        .into_par_iter()
                         .map(|row_idx| {
                             let row_vec = self.outer_view(row_idx).unwrap();
                             let mean = means[row_idx];
@@ -536,9 +561,12 @@ where
                 }
             }
         }
-        
+
         let n_minus_1 = n - T::one();
-        Ok(sum_sq_diffs.into_iter().map(|ssd| ssd / n_minus_1).collect())
+        Ok(sum_sq_diffs
+            .into_iter()
+            .map(|ssd| ssd / n_minus_1)
+            .collect())
     }
 
     fn var_col_chunk<V, T>(&self, reference: &mut [T]) -> anyhow::Result<()>
@@ -580,7 +608,8 @@ where
             CompressedStorage::CSR => {
                 for (row_idx, row_vec) in self.outer_iterator().enumerate() {
                     if mask[row_idx] {
-                        for (&col_idx, &val) in row_vec.indices().iter().zip(row_vec.data().iter()) {
+                        for (&col_idx, &val) in row_vec.indices().iter().zip(row_vec.data().iter())
+                        {
                             let diff = T::from(val).unwrap() - means[col_idx.index()];
                             sum_sq_diffs[col_idx.index()] += diff * diff;
                             nz_counts[col_idx.index()] += V::one();
@@ -615,7 +644,10 @@ where
         }
 
         let n_minus_1 = n - T::one();
-        Ok(sum_sq_diffs.into_iter().map(|ssd| ssd / n_minus_1).collect())
+        Ok(sum_sq_diffs
+            .into_iter()
+            .map(|ssd| ssd / n_minus_1)
+            .collect())
     }
 
     fn var_row_masked<V, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
@@ -653,7 +685,8 @@ where
             CompressedStorage::CSC => {
                 for (col_idx, col_vec) in self.outer_iterator().enumerate() {
                     if mask[col_idx] {
-                        for (&row_idx, &val) in col_vec.indices().iter().zip(col_vec.data().iter()) {
+                        for (&row_idx, &val) in col_vec.indices().iter().zip(col_vec.data().iter())
+                        {
                             let diff = T::from(val).unwrap() - means[row_idx.index()];
                             sum_sq_diffs[row_idx.index()] += diff * diff;
                             nz_counts[row_idx.index()] += V::one();
@@ -672,12 +705,15 @@ where
         }
 
         let n_minus_1 = n - T::one();
-        Ok(sum_sq_diffs.into_iter().map(|ssd| ssd / n_minus_1).collect())
+        Ok(sum_sq_diffs
+            .into_iter()
+            .map(|ssd| ssd / n_minus_1)
+            .collect())
     }
 }
 
-impl<M, I> MatrixMinMax for CsMatI<M, I> 
-where 
+impl<M, I> MatrixMinMax for CsMatI<M, I>
+where
     M: NumericOps + NumCast + Send + Sync,
     I: SpIndex + PrimInt + Unsigned + Send + Sync,
 {
@@ -712,20 +748,29 @@ where
             CompressedStorage::CSR => {
                 for (val, (_, col)) in self.iter() {
                     let v = Item::from(*val).unwrap();
-                    if v < min_ref[col.index()] { min_ref[col.index()] = v; }
-                    if v > max_ref[col.index()] { max_ref[col.index()] = v; }
+                    if v < min_ref[col.index()] {
+                        min_ref[col.index()] = v;
+                    }
+                    if v > max_ref[col.index()] {
+                        max_ref[col.index()] = v;
+                    }
                 }
             }
             CompressedStorage::CSC => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<(Item, Item)> = (0..self.cols()).into_par_iter()
+                    let results: Vec<(Item, Item)> = (0..self.cols())
+                        .into_par_iter()
                         .map(|col_idx| {
                             let mut c_min = Item::max_value();
                             let mut c_max = Item::min_value();
                             for &val in self.outer_view(col_idx).unwrap().data() {
                                 let v = Item::from(val).unwrap();
-                                if v < c_min { c_min = v; }
-                                if v > c_max { c_max = v; }
+                                if v < c_min {
+                                    c_min = v;
+                                }
+                                if v > c_max {
+                                    c_max = v;
+                                }
                             }
                             (c_min, c_max)
                         })
@@ -740,8 +785,12 @@ where
                         let mut c_max = Item::min_value();
                         for &val in col_vec.data() {
                             let v = Item::from(val).unwrap();
-                            if v < c_min { c_min = v; }
-                            if v > c_max { c_max = v; }
+                            if v < c_min {
+                                c_min = v;
+                            }
+                            if v > c_max {
+                                c_max = v;
+                            }
                         }
                         min_ref[col_idx] = c_min;
                         max_ref[col_idx] = c_max;
@@ -760,14 +809,19 @@ where
         match self.storage() {
             CompressedStorage::CSR => {
                 if self.nnz() > PARALLEL_THRESHOLD {
-                    let results: Vec<(Item, Item)> = (0..self.rows()).into_par_iter()
+                    let results: Vec<(Item, Item)> = (0..self.rows())
+                        .into_par_iter()
                         .map(|row_idx| {
                             let mut r_min = Item::max_value();
                             let mut r_max = Item::min_value();
                             for &val in self.outer_view(row_idx).unwrap().data() {
                                 let v = Item::from(val).unwrap();
-                                if v < r_min { r_min = v; }
-                                if v > r_max { r_max = v; }
+                                if v < r_min {
+                                    r_min = v;
+                                }
+                                if v > r_max {
+                                    r_max = v;
+                                }
                             }
                             (r_min, r_max)
                         })
@@ -782,8 +836,12 @@ where
                         let mut r_max = Item::min_value();
                         for &val in row_vec.data() {
                             let v = Item::from(val).unwrap();
-                            if v < r_min { r_min = v; }
-                            if v > r_max { r_max = v; }
+                            if v < r_min {
+                                r_min = v;
+                            }
+                            if v > r_max {
+                                r_max = v;
+                            }
                         }
                         min_ref[row_idx] = r_min;
                         max_ref[row_idx] = r_max;
@@ -793,8 +851,12 @@ where
             CompressedStorage::CSC => {
                 for (val, (row, _)) in self.iter() {
                     let v = Item::from(*val).unwrap();
-                    if v < min_ref[row.index()] { min_ref[row.index()] = v; }
-                    if v > max_ref[row.index()] { max_ref[row.index()] = v; }
+                    if v < min_ref[row.index()] {
+                        min_ref[row.index()] = v;
+                    }
+                    if v > max_ref[row.index()] {
+                        max_ref[row.index()] = v;
+                    }
                 }
             }
         }
@@ -802,8 +864,8 @@ where
     }
 }
 
-impl<M, I> MatrixNTop for CsMatI<M, I> 
-where 
+impl<M, I> MatrixNTop for CsMatI<M, I>
+where
     M: NumericOps + NumCast + Send + Sync,
     I: SpIndex + PrimInt + Unsigned + Send + Sync,
 {
@@ -816,14 +878,21 @@ where
         let mut result = vec![T::zero(); self.rows()];
         match self.storage() {
             CompressedStorage::CSR => {
-                let results: Vec<T> = (0..self.rows()).into_par_iter()
+                let results: Vec<T> = (0..self.rows())
+                    .into_par_iter()
                     .map(|row_idx| {
                         let row_vec = self.outer_view(row_idx).unwrap();
-                        let mut data: Vec<T> = row_vec.data().iter().map(|&v| T::from(v).unwrap()).collect();
+                        let mut data: Vec<T> = row_vec
+                            .data()
+                            .iter()
+                            .map(|&v| T::from(v).unwrap())
+                            .collect();
                         if data.len() <= n {
                             data.into_iter().sum()
                         } else {
-                            data.select_nth_unstable_by(n - 1, |a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                            data.select_nth_unstable_by(n - 1, |a, b| {
+                                b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
+                            });
                             data.into_iter().take(n).sum()
                         }
                     })
@@ -835,12 +904,15 @@ where
                 for (val, (row, _)) in self.iter() {
                     row_values[row.index()].push(T::from(*val).unwrap());
                 }
-                let results: Vec<T> = row_values.into_par_iter()
+                let results: Vec<T> = row_values
+                    .into_par_iter()
                     .map(|mut data| {
                         if data.len() <= n {
                             data.into_iter().sum()
                         } else {
-                            data.select_nth_unstable_by(n - 1, |a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                            data.select_nth_unstable_by(n - 1, |a, b| {
+                                b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
+                            });
                             data.into_iter().take(n).sum()
                         }
                     })
@@ -852,8 +924,8 @@ where
     }
 }
 
-impl<T, I> Normalize<T> for CsMatI<T, I> 
-where 
+impl<T, I> Normalize<T> for CsMatI<T, I>
+where
     T: FloatOpsTS + Send + Sync,
     I: SpIndex + PrimInt + Unsigned + Send + Sync,
 {
@@ -865,7 +937,13 @@ where
     ) -> anyhow::Result<()> {
         let scaling_factors: Vec<U> = sums
             .iter()
-            .map(|&sum| if sum > U::zero() { target / sum } else { U::zero() })
+            .map(|&sum| {
+                if sum > U::zero() {
+                    target / sum
+                } else {
+                    U::zero()
+                }
+            })
             .collect();
 
         let storage = self.storage();
@@ -898,8 +976,8 @@ where
     }
 }
 
-impl<T, I> Log1P<T> for CsMatI<T, I> 
-where 
+impl<T, I> Log1P<T> for CsMatI<T, I>
+where
     T: FloatOpsTS + Send + Sync,
     I: SpIndex + PrimInt + Unsigned + Send + Sync,
 {
@@ -938,7 +1016,7 @@ where
         for (batch, indices) in batch_indices {
             let n = T::from(indices.len()).unwrap();
             let mut b_sums = vec![T::zero(); self.cols()];
-            
+
             for &row_idx in &indices {
                 if let Some(row_vec) = self.outer_view(row_idx) {
                     for (&col_idx, &val) in row_vec.indices().iter().zip(row_vec.data().iter()) {
@@ -956,7 +1034,8 @@ where
 
                 for &row_idx in &indices {
                     if let Some(row_vec) = self.outer_view(row_idx) {
-                        for (&col_idx, &val) in row_vec.indices().iter().zip(row_vec.data().iter()) {
+                        for (&col_idx, &val) in row_vec.indices().iter().zip(row_vec.data().iter())
+                        {
                             let diff = T::from(val).unwrap() - b_means[col_idx.index()];
                             sum_sq_diffs[col_idx.index()] += diff * diff;
                             nz_counts[col_idx.index()] += V::one();
@@ -1002,7 +1081,9 @@ where
                 match self.storage() {
                     CompressedStorage::CSC => {
                         if let Some(col_vec) = self.outer_view(col_idx) {
-                            for (&row_idx, &val) in col_vec.indices().iter().zip(col_vec.data().iter()) {
+                            for (&row_idx, &val) in
+                                col_vec.indices().iter().zip(col_vec.data().iter())
+                            {
                                 b_sums[row_idx.index()] += T::from(val).unwrap();
                             }
                         }
@@ -1028,7 +1109,9 @@ where
                     match self.storage() {
                         CompressedStorage::CSC => {
                             if let Some(col_vec) = self.outer_view(col_idx) {
-                                for (&row_idx, &val) in col_vec.indices().iter().zip(col_vec.data().iter()) {
+                                for (&row_idx, &val) in
+                                    col_vec.indices().iter().zip(col_vec.data().iter())
+                                {
                                     let diff = T::from(val).unwrap() - b_means[row_idx.index()];
                                     sum_sq_diffs[row_idx.index()] += diff * diff;
                                     nz_counts[row_idx.index()] += V::one();
@@ -1062,8 +1145,8 @@ where
     }
 }
 
-impl<M, I> BatchMatrixMean for CsMatI<M, I> 
-where 
+impl<M, I> BatchMatrixMean for CsMatI<M, I>
+where
     M: NumericOps + NumCast + Send + Sync,
     I: SpIndex + PrimInt + Unsigned + Send + Sync,
 {
@@ -1092,7 +1175,9 @@ where
                 match self.storage() {
                     CompressedStorage::CSC => {
                         if let Some(col_vec) = self.outer_view(col_idx) {
-                            for (&row_idx, &val) in col_vec.indices().iter().zip(col_vec.data().iter()) {
+                            for (&row_idx, &val) in
+                                col_vec.indices().iter().zip(col_vec.data().iter())
+                            {
                                 b_sums[row_idx.index()] += T::from(val).unwrap();
                             }
                         }
@@ -1107,7 +1192,9 @@ where
                 }
             }
 
-            for s in &mut b_sums { *s = *s / n; }
+            for s in &mut b_sums {
+                *s = *s / n;
+            }
             result.insert(batch, b_sums);
         }
         Ok(result)
@@ -1140,7 +1227,9 @@ where
                 }
             }
 
-            for s in &mut b_sums { *s = *s / n; }
+            for s in &mut b_sums {
+                *s = *s / n;
+            }
             result.insert(batch, b_sums);
         }
         Ok(result)
@@ -1153,7 +1242,12 @@ mod tests {
     use sprs::CsMatI;
 
     fn create_test_csr() -> CsMatI<f64, usize> {
-        let mut mat = CsMatI::new_csc((3, 3), vec![0, 2, 4, 5], vec![0, 2, 0, 1, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let mut mat = CsMatI::new_csc(
+            (3, 3),
+            vec![0, 2, 4, 5],
+            vec![0, 2, 0, 1, 2],
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        );
         mat.to_csr()
     }
 
@@ -1162,7 +1256,7 @@ mod tests {
         let mat = create_test_csr();
         let counts: Vec<u32> = mat.nonzero_row().unwrap();
         assert_eq!(counts, vec![2, 1, 2]);
-        
+
         let col_counts: Vec<u32> = mat.nonzero_col().unwrap();
         assert_eq!(col_counts, vec![2, 2, 1]);
     }
@@ -1172,7 +1266,7 @@ mod tests {
         let mat = create_test_csr();
         let sums: Vec<f64> = mat.sum_row().unwrap();
         assert_eq!(sums, vec![4.0, 4.0, 7.0]);
-        
+
         let col_sums: Vec<f64> = mat.sum_col().unwrap();
         assert_eq!(col_sums, vec![3.0, 7.0, 5.0]);
     }
@@ -1214,7 +1308,7 @@ mod tests {
         let mat = create_test_csr();
         let batches = vec!["A", "A", "B"];
         let means = mat.mean_batch_col::<f64, _>(&batches).unwrap();
-        
+
         // Batch A (Rows 0, 1):
         // row 0: {0: 1.0, 1: 3.0}
         // row 1: {1: 4.0}
@@ -1234,7 +1328,12 @@ mod tests {
 
     #[test]
     fn test_sprs_csc_native() {
-        let mat = CsMatI::new_csc((3, 3), vec![0usize, 2, 4, 5], vec![0usize, 2, 0, 1, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let mat = CsMatI::new_csc(
+            (3, 3),
+            vec![0usize, 2, 4, 5],
+            vec![0usize, 2, 0, 1, 2],
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        );
         let sums: Vec<f64> = mat.sum_col().unwrap();
         assert_eq!(sums, vec![3.0, 7.0, 5.0]);
     }
@@ -1244,12 +1343,20 @@ mod tests {
         // Values with large offset: 1e9 + [1.0, 2.0, 3.0]
         // Variance should be exactly 1.0
         let offset = 1_000_000_000.0;
-        let mat = CsMatI::new_csc((3, 1), vec![0usize, 3], vec![0usize, 1, 2], 
-            vec![offset + 1.0, offset + 2.0, offset + 3.0]);
-        
+        let mat = CsMatI::new_csc(
+            (3, 1),
+            vec![0usize, 3],
+            vec![0usize, 1, 2],
+            vec![offset + 1.0, offset + 2.0, offset + 3.0],
+        );
+
         let vars = mat.var_col::<u32, f64>().unwrap();
         // Stable two-pass algorithm should be very accurate
-        assert!((vars[0] - 1.0).abs() < 1e-10, "Variance {} should be exactly 1.0", vars[0]);
+        assert!(
+            (vars[0] - 1.0).abs() < 1e-10,
+            "Variance {} should be exactly 1.0",
+            vars[0]
+        );
     }
 
     #[test]
@@ -1263,11 +1370,11 @@ mod tests {
         let mut coo = sprs::TriMat::new((10, 10));
         coo.add_triplet(5, 5, 42.0);
         let sparse = coo.to_csr::<usize>();
-        
+
         let sums = sparse.sum_row::<f64>().unwrap();
         assert_eq!(sums[5], 42.0);
         assert_eq!(sums[0], 0.0);
-        
+
         let nz = sparse.nonzero_col::<u32>().unwrap();
         assert_eq!(nz[5], 1);
         assert_eq!(nz[0], 0);
@@ -1279,7 +1386,7 @@ mod tests {
         // Batch with only one row - variance should be 0.0 or handled
         let batches = vec!["Single", "Other", "Other"];
         let vars = mat.var_batch_row::<u32, f64, _>(&batches).unwrap();
-        
+
         // "Single" batch only has Row 0. Sample variance requires N > 1.
         let single_vars = vars.get("Single").unwrap();
         for &v in single_vars {
@@ -1300,7 +1407,7 @@ mod tests {
         let mut mat = create_test_csr(); // original sums: [4, 4, 7]
         let row_sums = vec![4.0, 4.0, 7.0];
         mat.normalize(&row_sums, 1.0, &Direction::ROW).unwrap();
-        
+
         let new_sums = mat.sum_row::<f64>().unwrap();
         for &s in &new_sums {
             assert!((s - 1.0).abs() < 1e-9);
@@ -1308,7 +1415,7 @@ mod tests {
 
         // Test Log1P on the normalized matrix (all non-zeros should be scaled)
         mat.log1p_normalize().unwrap();
-        // The values were normalized such that row sums are 1.0. 
+        // The values were normalized such that row sums are 1.0.
         // For a row with 2 non-zeros (like row 0), values might be 1/4 and 3/4.
         // Let's just check that all values are now transformed.
         for (val, _) in mat.iter() {
@@ -1324,7 +1431,7 @@ mod tests {
             coo.add_triplet(i, i, 1.0);
         }
         let mat = coo.to_csr::<usize>();
-        
+
         // This should trigger parallel logic if NNZ is high, but we can just check correctness
         let sums = mat.sum_row::<f64>().unwrap();
         assert_eq!(sums.len(), size);

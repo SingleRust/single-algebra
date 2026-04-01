@@ -537,7 +537,7 @@ where
     fn var_row_masked<I, T>(&self, mask: &[bool]) -> anyhow::Result<Vec<T>>
     where
         I: PrimInt + Unsigned + Zero + AddAssign + Into<T> + Send + Sync,
-        T: Float + NumCast + AddAssign + Sum + Send + Sync
+        T: Float + NumCast + AddAssign + Sum + Send + Sync,
     {
         // Validate mask length
         if mask.len() < self.ncols() {
@@ -866,7 +866,7 @@ where
                 for j in col_start..col_end {
                     let row = self.row_indices()[j];
                     let val = T::from(self.values()[j]).unwrap();
-                    batch_means[row] = batch_means[row] + val;
+                    batch_means[row] += val;
                     batch_counts[row] += 1;
                 }
             }
@@ -887,7 +887,7 @@ where
                     let row = self.row_indices()[j];
                     let val = T::from(self.values()[j]).unwrap();
                     let diff = val - batch_means[row];
-                    batch_sum_sq[row] = batch_sum_sq[row] + diff * diff;
+                    batch_sum_sq[row] += diff * diff;
                 }
             }
 
@@ -1031,15 +1031,16 @@ impl<M: NumericOps + NumCast> MatrixNTop for CscMatrix<M> {
 
     fn sum_row_n_top<T>(&self, n: usize) -> anyhow::Result<Vec<T>>
     where
-        T: Float + NumCast + AddAssign + Sum {
+        T: Float + NumCast + AddAssign + Sum,
+    {
         let mut result = vec![T::zero(); self.nrows()];
-        
+
         let mut row_values: Vec<Vec<T>> = vec![Vec::new(); self.nrows()];
-        
+
         for col_idx in 0..self.ncols() {
             let col_start = self.col_offsets()[col_idx];
             let col_end = self.col_offsets()[col_idx + 1];
-            
+
             for idx in col_start..col_end {
                 let row_idx = self.row_indices()[idx];
                 if let Some(val) = T::from(self.values()[idx]) {
@@ -1047,7 +1048,7 @@ impl<M: NumericOps + NumCast> MatrixNTop for CscMatrix<M> {
                 }
             }
         }
-        
+
         for (row_idx, mut values) in row_values.into_iter().enumerate() {
             if values.len() <= n {
                 result[row_idx] = values.into_iter().sum();
@@ -1056,7 +1057,7 @@ impl<M: NumericOps + NumCast> MatrixNTop for CscMatrix<M> {
                 result[row_idx] = values.into_iter().take(n).sum();
             }
         }
-        
+
         Ok(result)
     }
 }
