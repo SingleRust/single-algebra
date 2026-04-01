@@ -1242,7 +1242,7 @@ mod tests {
     use sprs::CsMatI;
 
     fn create_test_csr() -> CsMatI<f64, usize> {
-        let mut mat = CsMatI::new_csc(
+        let mat = CsMatI::new_csc(
             (3, 3),
             vec![0, 2, 4, 5],
             vec![0, 2, 0, 1, 2],
